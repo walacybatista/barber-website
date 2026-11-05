@@ -1,0 +1,567 @@
+---
+/**
+ * Fluxo de agendamento renderizado no servidor, sem JavaScript obrigatório (ADR-010).
+ * Estado na query string: ?servico=<slug>&barbeiro=<slug|qualquer>&data=YYYY-MM-DD&hora=<ISO UTC>.
+ * Cada passo é um <form method="get"> que acrescenta o parâmetro; o servidor valida tudo e escolhe o
+ * passo. O passo final é um POST para a Action createBooking (accept: 'form'). Dados pessoais nunca
+ * vão para a query string.
+ */
+import { actions, isInputError } from 'astro:actions';
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import Button from '@/components/Button.astro';
+import Container from '@/components/Container.astro';
+import Alert from '@/components/form/Alert.astro';
+import ConsentCheckbox from '@/components/form/ConsentCheckbox.astro';
+import DateStrip from '@/components/form/DateStrip.astro';
+import Input from '@/components/form/Input.astro';
+import RadioCard from '@/components/form/RadioCard.astro';
+import Stepper from '@/components/form/Stepper.astro';
+import TimeSlotGrid from '@/components/form/TimeSlotGrid.astro';
+import ExternalLink from '@/components/ExternalLink.astro';
+import { getDb } from '@/db/client';
+import { listAvailability, listCatalog, type AvailableSlot } from '@/lib/booking/repository';
+import {
+  buildDateStrip,
+  formatDateLong,
+  formatDateTimeLong,
+  groupSlots,
+  isDateInWindow,
+  parseInstant,
+} from '@/lib/agendar';
+import { formatBRL } from '@/lib/format';
+import { isValidLocalDate, weekdayOf } from '@/lib/time/tz';
+import { whatsappHref } from '@/lib/whatsapp';
+
+export const prerender = false;
+
+const now = new Date();
+const isPost = Astro.request.method === 'POST';
+
+// ---- Entrada: query string (GET) ou corpo do formulário (POST de recuperação/Action) ----
+const MAX_BODY_BYTES = 16 * 1024;
+const src = new URLSearchParams();
+let bodyRejected = false;
+if (isPost) {
+  // Recusa corpo grande ou sem content-length ANTES de ler (evita carregar POST de centenas de MB).
+  const declared = Number(Astro.request.headers.get('content-length') ?? Number.NaN);
+  if (!Number.isFinite(declared) || declared < 0 || declared > MAX_BODY_BYTES) {
+    bodyRejected = true;
+    Astro.response.status = declared > MAX_BODY_BYTES ? 413 : 400;
+  } else {
+    try {
+      const fd = await Astro.request.formData();
+      for (const [k, v] of fd) if (typeof v === 'string') src.set(k, v.slice(0, 200));
+    } catch {
+      // corpo ilegível: segue como se estivesse vazio
+    }
+  }
+} else {
+  for (const [k, v] of Astro.url.searchParams) src.set(k, v.slice(0, 200));
+}
+
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+
+// ---- Sucesso da Action: redireciona para a página do token (token fora da query string) ----
+const result = Astro.getActionResult(actions.createBooking);
+if (result && !result.error) {
+  const res = Astro.redirect(
+    `/agendamento/${encodeURIComponent(result.data.manageToken)}?novo=1`,
+    303,
+  );
+  res.headers.set('Cache-Control', 'no-store');
+  res.headers.set('Referrer-Policy', 'no-referrer');
+  return res;
+}
+
+// ---- Catálogo ----
+let catalog: Awaited<ReturnType<typeof listCatalog>> | undefined;
+try {
+  catalog = await listCatalog(getDb());
+} catch (err) {
+  console.error('[agendar] falha ao carregar catálogo', err);
+  Astro.response.status = 503;
+}
+
+const notices: string[] = [];
+if (bodyRejected) notices.push('Não foi possível processar o envio. Tente de novo.');
+let formAlert:
+  { variant: 'error' | 'warning'; title: string; text: string; whatsapp?: boolean } | undefined;
+let slotTaken = false;
+const CLIENT_ERRORS: Record<string, number> = {
+  BAD_REQUEST: 400,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  UNSUPPORTED_MEDIA_TYPE: 415,
+  CONTENT_TOO_LARGE: 413,
+};
+let fieldErrors: Record<string, string> = {};
+
+const services = catalog?.services ?? [];
+const barbers = catalog?.barbers ?? [];
+const openWeekdays = new Set((catalog?.openingHours ?? []).map((h) => h.weekday));
+
+const service = services.find((s) => s.slug === src.get('servico'));
+if (src.get('servico') && !service && catalog) {
+  notices.push('Não encontramos o serviço informado. Escolha um da lista.');
+}
+const barberParam = src.get('barbeiro');
+const barber: 'any' | (typeof barbers)[number] | undefined =
+  barberParam === 'qualquer' ? 'any' : barbers.find((b) => b.slug === barberParam);
+if (barberParam && !barber && catalog) {
+  notices.push('Não encontramos o barbeiro informado. Escolha um da lista.');
+}
+
+let date: string | undefined;
+const dateParam = src.get('data');
+if (service && barber && dateParam) {
+  if (!isValidLocalDate(dateParam)) {
+    notices.push('Data inválida. Escolha uma data da lista.');
+  } else if (!isDateInWindow(dateParam, now)) {
+    notices.push(
+      'Essa data está fora do período de agendamento (hoje até 30 dias). Escolha outra.',
+    );
+  } else if (!openWeekdays.has(weekdayOf(dateParam))) {
+    notices.push('Não abrimos nesse dia. Escolha outra data.');
+  } else {
+    date = dateParam;
+  }
+}
+
+// ---- Resultado de erro da Action (POST do último passo) ----
+let horaParam: string | null = src.get('hora');
+const err = result?.error;
+if (err) {
+  if (isInputError(err)) {
+    Astro.response.status = 400;
+    for (const [field, msgs] of Object.entries(err.fields)) {
+      if (msgs?.[0]) fieldErrors[field] = msgs[0];
+    }
+    if (fieldErrors.serviceId || fieldErrors.startAt || fieldErrors.barberId) {
+      fieldErrors = {};
+      horaParam = null;
+      notices.push('Houve um problema com o horário escolhido. Escolha novamente.');
+    }
+  } else if (err.code === 'CONFLICT') {
+    slotTaken = true;
+    horaParam = null;
+    Astro.response.status = 409;
+  } else if (err.code === 'TOO_MANY_REQUESTS') {
+    Astro.response.status = 429;
+    formAlert = {
+      variant: 'warning',
+      title: 'Não foi possível concluir o agendamento agora',
+      text: err.message,
+      whatsapp: true,
+    };
+  } else if (err.code !== 'INTERNAL_SERVER_ERROR') {
+    // Erros do cliente (BAD_REQUEST, FORBIDDEN, NOT_FOUND, 413, 415...): 4xx e aviso genérico.
+    Astro.response.status = CLIENT_ERRORS[err.code] ?? 400;
+    notices.push('Não foi possível concluir o envio. Confira suas escolhas e tente de novo.');
+  } else {
+    Astro.response.status = 500;
+    formAlert = {
+      variant: 'error',
+      title: 'Algo deu errado',
+      text: 'Não conseguimos concluir o agendamento. Tente de novo em instantes.',
+      whatsapp: true,
+    };
+  }
+}
+
+// ---- Horários (servidor) ----
+let slots: AvailableSlot[] = [];
+let slotsError = false;
+if (service && barber && date) {
+  try {
+    slots = await listAvailability(getDb(), {
+      date,
+      serviceId: service.id,
+      barberId: barber === 'any' ? null : barber.id,
+    });
+  } catch (e) {
+    console.error('[agendar] falha ao listar horários', e);
+    slotsError = true;
+  }
+}
+
+let hora: Date | undefined;
+if (horaParam && date) {
+  const parsed = parseInstant(horaParam);
+  if (parsed && slots.some((s) => s.start.getTime() === parsed.getTime())) {
+    hora = parsed;
+  } else if (!slotsError && !slotTaken) {
+    notices.push('Esse horário não está mais disponível. Escolha outro.');
+  }
+}
+
+// ---- Passo atual ----
+let step = !service ? 1 : !barber ? 2 : !date || !hora ? 3 : 4;
+const back = Number(src.get('passo'));
+if (Number.isInteger(back) && back >= 1 && back < step) step = back;
+
+const STEPS = ['Serviço', 'Barbeiro', 'Data e hora', 'Seus dados', 'Confirmação'];
+const stepTitles = [
+  'Escolha o serviço',
+  'Escolha o barbeiro',
+  'Escolha data e horário',
+  'Seus dados',
+];
+
+// Valores já escolhidos que acompanham o fluxo (só os de passos anteriores ao atual).
+const chosen: Record<string, string> = {};
+if (service) chosen.servico = service.slug;
+if (barber) chosen.barbeiro = barber === 'any' ? 'qualquer' : barber.slug;
+if (date) chosen.data = date;
+if (hora) chosen.hora = hora.toISOString();
+const keysBefore = (n: number) => ['servico', 'barbeiro', 'data', 'hora'].slice(0, n - 1);
+const hiddenFor = (n: number) =>
+  keysBefore(n)
+    .filter((k) => chosen[k])
+    .map((k) => [k, chosen[k]] as const);
+const linkTo = (n: number) => {
+  const p = new URLSearchParams();
+  for (const k of keysBefore(n + 1)) if (chosen[k]) p.set(k, chosen[k]);
+  p.set('passo', String(n));
+  return `/agendar?${p.toString()}`;
+};
+const dayHref = (d: string) => {
+  const p = new URLSearchParams();
+  if (chosen.servico) p.set('servico', chosen.servico);
+  if (chosen.barbeiro) p.set('barbeiro', chosen.barbeiro);
+  p.set('data', d);
+  return `/agendar?${p.toString()}#horarios`;
+};
+const stepperSteps = STEPS.map((label, i) => ({
+  label,
+  href: i + 1 < step ? linkTo(i + 1) : undefined,
+}));
+
+// Dados pessoais só vêm do corpo de um POST, nunca da query string.
+const customerName = isPost ? (src.get('customerName') ?? '') : '';
+const customerPhone = isPost ? (src.get('customerPhone') ?? '') : '';
+const carryPersonal = Boolean(customerName || customerPhone);
+const groups = groupSlots(slots.map((s) => s.start));
+// O formulário de horários (passo 3) só reenvia nome/telefone se existir e houver horários na data.
+const dataKept = carryPersonal && step === 3 && Boolean(date) && !slotsError && groups.length > 0;
+const errorCount = Object.keys(fieldErrors).length;
+
+const strip = catalog ? buildDateStrip(now, openWeekdays) : [];
+const pageTitle = step <= 4 ? `Agendar: ${stepTitles[step - 1]}` : 'Agendar';
+---
+
+<BaseLayout
+  title={`${pageTitle} — Cobre Velho`}
+  description="Agende seu horário na Cobre Velho Barbearia (fictícia): serviço, barbeiro, data e horário."
+  minimal
+>
+  <Container class="max-w-[48rem] py-8 lg:py-12">
+    <h1 class="text-h1 mb-6 leading-[var(--text-h1--line-height)] font-bold">Agendar horário</h1>
+
+    {!catalog ? (
+      <Alert variant="error" title="Não foi possível carregar o agendamento" data-autofocus>
+        <p>Tivemos um problema do nosso lado. Tente de novo em instantes ou fale com a gente.</p>
+        <div class="mt-3 flex flex-wrap gap-3">
+          <Button href="/agendar" variant="secondary">
+            Tentar de novo
+          </Button>
+          <Button
+            href={whatsappHref('Olá! Não consegui agendar pelo site (projeto fictício).')}
+            external
+            variant="secondary"
+          >
+            Falar no WhatsApp
+          </Button>
+        </div>
+      </Alert>
+    ) : (
+      <>
+        <Stepper steps={stepperSteps} current={step} />
+
+        {slotTaken && (
+          <Alert
+            variant="error"
+            title="Esse horário acabou de ser reservado"
+            class="mb-6"
+            data-autofocus
+          >
+            <p>
+              Alguém foi mais rápido. Escolha outro horário abaixo
+              {dataKept ? '; seu nome e telefone foram mantidos.' : '.'}
+            </p>
+          </Alert>
+        )}
+        {formAlert && (
+          <Alert variant={formAlert.variant} title={formAlert.title} class="mb-6" data-autofocus>
+            <p>{formAlert.text}</p>
+            {formAlert.whatsapp && (
+              <p class="mt-2">
+                Se preferir,{' '}
+                <ExternalLink
+                  href={whatsappHref('Olá! Quero agendar um horário (projeto fictício).')}
+                  class="prose-link"
+                >
+                  fale com a gente pelo WhatsApp
+                </ExternalLink>
+                .
+              </p>
+            )}
+          </Alert>
+        )}
+        {notices.map((n) => (
+          <Alert variant="warning" title="Ajustamos sua escolha" class="mb-6">
+            <p>{n}</p>
+          </Alert>
+        ))}
+
+        {/* Resumo parcial das escolhas */}
+        {step > 1 && service && (
+          <dl class="bg-surface border-border-subtle mb-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md border p-4 text-sm">
+            <dt class="text-text-muted">Serviço</dt>
+            <dd>
+              {service.name} · {service.durationMin} min · {formatBRL(service.priceCents)}
+            </dd>
+            {step > 2 && barber && (
+              <>
+                <dt class="text-text-muted">Barbeiro</dt>
+                <dd>{barber === 'any' ? 'Sem preferência' : barber.name}</dd>
+              </>
+            )}
+            {step > 3 && hora && (
+              <>
+                <dt class="text-text-muted">Quando</dt>
+                <dd>{formatDateTimeLong(hora)}</dd>
+              </>
+            )}
+          </dl>
+        )}
+
+        {step === 1 && (
+          <form method="get" action="/agendar">
+            {chosen.barbeiro && <input type="hidden" name="barbeiro" value={chosen.barbeiro} />}
+            <h2 id="titulo-passo" class="text-h2 mb-4 font-semibold" tabindex="-1">
+              Escolha o serviço
+            </h2>
+            <fieldset aria-labelledby="titulo-passo">
+              <legend class="sr-only">Serviço</legend>
+              {services.length === 0 ? (
+                <p role="status" class="text-text-muted">
+                  Nenhum serviço disponível no momento.
+                </p>
+              ) : (
+                <div class="grid gap-3">
+                  {services.map((s) => (
+                    <RadioCard
+                      name="servico"
+                      value={s.slug}
+                      checked={s.slug === chosen.servico}
+                      required
+                    >
+                      <span class="block font-semibold">{s.name}</span>
+                      <span class="text-text-muted block text-sm">
+                        {s.durationMin} min · {formatBRL(s.priceCents)}
+                      </span>
+                    </RadioCard>
+                  ))}
+                </div>
+              )}
+            </fieldset>
+            <Button type="submit" class="mt-6 w-full sm:w-auto" disabled={services.length === 0}>
+              Continuar
+            </Button>
+          </form>
+        )}
+
+        {step === 2 && (
+          <form method="get" action="/agendar">
+            {hiddenFor(2).map(([k, v]) => (
+              <input type="hidden" name={k} value={v} />
+            ))}
+            <h2 id="titulo-passo" class="text-h2 mb-4 font-semibold" tabindex="-1">
+              Escolha o barbeiro
+            </h2>
+            <fieldset aria-labelledby="titulo-passo">
+              <legend class="sr-only">Barbeiro</legend>
+              <div class="grid gap-3">
+                <RadioCard
+                  name="barbeiro"
+                  value="qualquer"
+                  checked={chosen.barbeiro === 'qualquer'}
+                  required
+                >
+                  <span class="block font-semibold">Sem preferência</span>
+                  <span class="text-text-muted block text-sm">
+                    Reservamos com o primeiro barbeiro livre no horário.
+                  </span>
+                </RadioCard>
+                {barbers.map((b) => (
+                  <RadioCard
+                    name="barbeiro"
+                    value={b.slug}
+                    checked={b.slug === chosen.barbeiro}
+                    required
+                  >
+                    <span class="block font-semibold">{b.name}</span>
+                    <span class="text-text-muted block text-sm">{b.specialties.join(' · ')}</span>
+                  </RadioCard>
+                ))}
+              </div>
+            </fieldset>
+            <Button type="submit" class="mt-6 w-full sm:w-auto">
+              Continuar
+            </Button>
+          </form>
+        )}
+
+        {step === 3 && service && barber && (
+          <section aria-labelledby="titulo-passo">
+            <h2 id="titulo-passo" class="text-h2 mb-4 font-semibold" tabindex="-1">
+              Escolha data e horário
+            </h2>
+            <DateStrip days={strip} selected={date} hrefFor={dayHref} />
+
+            <div id="horarios" class="mt-6">
+              {!date ? (
+                <p role="status" class="text-text-muted">
+                  Escolha uma data acima para ver os horários livres.
+                </p>
+              ) : slotsError ? (
+                <Alert variant="error" title="Não foi possível carregar os horários">
+                  <p>Tente de novo em instantes.</p>
+                  <Button href={dayHref(date)} variant="secondary" class="mt-3">
+                    Tentar de novo
+                  </Button>
+                </Alert>
+              ) : groups.length === 0 ? (
+                <div
+                  role="status"
+                  class="bg-surface border-border-subtle rounded-md border p-6 text-center"
+                >
+                  <h3 class="text-h3 font-semibold">
+                    Sem horários livres em {formatDateLong(date)}
+                  </h3>
+                  <p class="text-text-muted mt-2">Escolha outra data na faixa acima.</p>
+                </div>
+              ) : (
+                <form method={carryPersonal ? 'post' : 'get'} action="/agendar">
+                  {hiddenFor(3).map(([k, v]) => (
+                    <input type="hidden" name={k} value={v} />
+                  ))}
+                  <input type="hidden" name="data" value={date} />
+                  {carryPersonal && (
+                    <input type="hidden" name="customerName" value={customerName} />
+                  )}
+                  {carryPersonal && (
+                    <input type="hidden" name="customerPhone" value={customerPhone} />
+                  )}
+                  <TimeSlotGrid
+                    groups={groups}
+                    selected={chosen.hora}
+                    dateLabel={formatDateLong(date)}
+                  />
+                  <Button type="submit" class="mt-6 w-full sm:w-auto">
+                    Continuar
+                  </Button>
+                </form>
+              )}
+            </div>
+          </section>
+        )}
+
+        {step === 4 && service && barber && hora && date && (
+          <section aria-labelledby="titulo-passo">
+            <h2 id="titulo-passo" class="text-h2 mb-4 font-semibold" tabindex="-1">
+              Seus dados
+            </h2>
+
+            {errorCount > 0 && (
+              <div
+                role="alert"
+                class="bg-error-bg border-error mb-6 rounded-lg border p-4"
+                data-autofocus
+                tabindex="-1"
+              >
+                <p class="text-error font-semibold">
+                  Corrija {errorCount} {errorCount === 1 ? 'campo' : 'campos'} para continuar
+                </p>
+                <ul class="mt-2 list-disc pl-5">
+                  {fieldErrors.customerName && (
+                    <li>
+                      <a class="prose-link" href="#campo-nome">
+                        {fieldErrors.customerName}
+                      </a>
+                    </li>
+                  )}
+                  {fieldErrors.customerPhone && (
+                    <li>
+                      <a class="prose-link" href="#campo-telefone">
+                        {fieldErrors.customerPhone}
+                      </a>
+                    </li>
+                  )}
+                  {fieldErrors.consent && (
+                    <li>
+                      <a class="prose-link" href="#campo-consentimento">
+                        {fieldErrors.consent}
+                      </a>
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            <form method="POST" action={actions.createBooking} novalidate class="space-y-6">
+              <input type="hidden" name="servico" value={service.slug} />
+              <input type="hidden" name="barbeiro" value={chosen.barbeiro} />
+              <input type="hidden" name="data" value={date} />
+              <input type="hidden" name="hora" value={hora.toISOString()} />
+              <input type="hidden" name="serviceId" value={String(service.id)} />
+              <input
+                type="hidden"
+                name="barberId"
+                value={barber === 'any' ? '' : String(barber.id)}
+              />
+              <input type="hidden" name="startAt" value={hora.toISOString()} />
+
+              <Input
+                id="campo-nome"
+                name="customerName"
+                label="Nome"
+                autocomplete="name"
+                value={customerName}
+                error={fieldErrors.customerName}
+                maxlength={80}
+              />
+              <Input
+                id="campo-telefone"
+                name="customerPhone"
+                type="tel"
+                inputmode="tel"
+                autocomplete="tel"
+                label="Telefone (com DDD)"
+                help="Exemplo: (11) 91234-5678. Usamos só para este agendamento."
+                value={customerPhone}
+                error={fieldErrors.customerPhone}
+                maxlength={30}
+              />
+              <ConsentCheckbox
+                id="campo-consentimento"
+                name="consent"
+                error={fieldErrors.consent}
+              />
+
+              <Button type="submit" class="w-full sm:w-auto">
+                Confirmar agendamento
+              </Button>
+            </form>
+          </section>
+        )}
+      </>
+    )}
+  </Container>
+</BaseLayout>
+
+<script>
+  // Melhoria progressiva: leva o foco ao aviso/resumo de erro (sem JS ele continua visível no topo).
+  document.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+</script>

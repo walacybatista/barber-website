@@ -15,7 +15,9 @@ const site = process.env.SITE_URL ?? env.SITE_URL ?? (isProd ? undefined : 'http
 export default defineConfig({
   site,
   adapter: node({ mode: 'standalone' }),
-  security: { checkOrigin: true },
+  // actionBodySizeLimit: o handler de Actions lê o corpo antes da página; o formulário de
+  // agendamento tem poucos campos, então 16 KB é folga ampla (padrão do Astro: 1 MiB). ADR-010.
+  security: { checkOrigin: true, actionBodySizeLimit: 16 * 1024 },
   vite: {
     plugins: [tailwindcss()],
   },

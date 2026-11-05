@@ -180,7 +180,11 @@ export const sessions = pgTable(
   (t) => [index('sessions_expires_idx').on(t.expiresAt)],
 );
 
-/** `key` = sha256(ip + '\0' + usuário minúsculo): não guarda IP em claro. Só falhas são registradas. */
+/**
+ * Tabela genérica de rate limit: `key` tem prefixo de uso (`login:*`, `booking:*`) e guarda só hash
+ * (nunca IP em claro). Toda tentativa é registrada antes do trabalho caro; no sucesso do login as
+ * unidades são devolvidas.
+ */
 export const loginAttempts = pgTable(
   'login_attempts',
   {
@@ -188,5 +192,8 @@ export const loginAttempts = pgTable(
     key: text('key').notNull(),
     attemptedAt: tstz('attempted_at').notNull().defaultNow(),
   },
-  (t) => [index('login_attempts_key_idx').on(t.key, t.attemptedAt)],
+  (t) => [
+    index('login_attempts_key_idx').on(t.key, t.attemptedAt),
+    index('login_attempts_attempted_at_idx').on(t.attemptedAt),
+  ],
 );

@@ -1,6 +1,7 @@
 ---
 import '@/styles/global.css';
 import Header from '@/components/Header.astro';
+import HeaderMinimal from '@/components/HeaderMinimal.astro';
 import Footer from '@/components/Footer.astro';
 import WhatsAppFloatingButton from '@/components/WhatsAppFloatingButton.astro';
 import { business } from '@/data/business';
@@ -15,6 +16,8 @@ interface Props {
   /** Objeto JSON-LD a embutir (ex.: BarberShop na home). */
   jsonLd?: object;
   noindex?: boolean;
+  /** Páginas de formulário: header simplificado e sem WhatsApp flutuante (design 6.3/6.11). */
+  minimal?: boolean;
 }
 
 const {
@@ -23,6 +26,7 @@ const {
   ogImage = '/og.png',
   jsonLd,
   noindex,
+  minimal = false,
 } = Astro.props;
 
 // ADR-009: noindex por padrão (PUBLIC_NOINDEX); páginas podem forçar noindex via prop.
@@ -81,11 +85,11 @@ const ogImageUrl = new URL(ogImage, site).href;
     >
       Ir para o conteúdo
     </a>
-    <Header />
+    {minimal ? <HeaderMinimal /> : <Header />}
     <main id="conteudo" tabindex="-1" class="outline-none">
       <slot />
     </main>
     <Footer />
-    <WhatsAppFloatingButton />
+    {!minimal && <WhatsAppFloatingButton />}
   </body>
 </html>

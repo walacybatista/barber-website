@@ -1,0 +1,24 @@
+---
+import { business } from '@/data/business';
+import Container from './Container.astro';
+
+interface Props {
+  /** Rótulo do link de saída (padrão: voltar ao site). */
+  backLabel?: string;
+}
+const { backLabel = 'Voltar ao site' } = Astro.props;
+---
+
+<header class="bg-surface border-border-subtle border-b">
+  <Container class="flex min-h-16 items-center justify-between gap-3">
+    <a href="/" class="font-display text-xl font-bold tracking-tight">
+      {business.shortName}
+    </a>
+    <a
+      href="/"
+      class="hover:text-primary flex min-h-11 items-center px-2 underline underline-offset-4"
+    >
+      {backLabel}
+    </a>
+  </Container>
+</header>

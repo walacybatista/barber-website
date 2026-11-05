@@ -15,7 +15,7 @@ export function buildBarberShopJsonLd(
   const priceRange =
     prices.length > 0
       ? `${formatBRL(Math.min(...prices))} - ${formatBRL(Math.max(...prices))}`.replace(
-          /[  ]/g,
+          /[\u00A0\u202F]/g,
           ' ',
         )
       : undefined;

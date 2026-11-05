@@ -1,0 +1,61 @@
+---
+import type { StripDay } from '@/lib/agendar';
+
+interface Props {
+  days: StripDay[];
+  selected?: string;
+  /** Monta o href de um dia. */
+  hrefFor: (date: string) => string;
+}
+const { days, selected, hrefFor } = Astro.props;
+const base =
+  'flex h-[4.5rem] w-16 shrink-0 flex-col items-center justify-center rounded-md border text-center';
+---
+
+<nav aria-label="Escolha a data (próximos 30 dias)" class="max-w-full min-w-0">
+  <ul
+    data-date-strip
+    class="relative flex max-w-full min-w-0 snap-x gap-2 overflow-x-auto overscroll-x-contain px-1 pt-1 pb-3"
+    role="list"
+  >
+    {days.map((d) => (
+      <li class="shrink-0 snap-start">
+        {d.closed ? (
+          <span
+            class={`${base} bg-surface-2 text-disabled border-border-subtle cursor-not-allowed`}
+          >
+            <span class="text-xs uppercase">{d.weekday}</span>
+            <span class="text-lg font-semibold">{d.day}</span>
+            <span class="text-xs">{d.month}</span>
+            <span class="sr-only">, fechado, sem horários</span>
+          </span>
+        ) : (
+          <a
+            href={hrefFor(d.date)}
+            aria-current={d.date === selected ? 'date' : undefined}
+            class:list={[
+              base,
+              'focus-visible:outline-focus focus-visible:outline-[3px] focus-visible:outline-offset-2',
+              d.date === selected
+                ? 'bg-primary border-primary text-on-primary'
+                : 'bg-surface border-border-strong hover:bg-surface-2',
+            ]}
+          >
+            <span class="text-xs uppercase">{d.weekday}</span>
+            <span class="text-lg font-semibold">{d.day}</span>
+            <span class="text-xs">{d.month}</span>
+          </a>
+        )}
+      </li>
+    ))}
+  </ul>
+</nav>
+
+<script>
+  // Melhoria progressiva: mostra o dia selecionado dentro da faixa, sem rolar a página.
+  const strip = document.querySelector<HTMLElement>('[data-date-strip]');
+  const current = strip?.querySelector<HTMLElement>('[aria-current="date"]');
+  if (strip && current) {
+    strip.scrollLeft = current.offsetLeft - (strip.clientWidth - current.offsetWidth) / 2;
+  }
+</script>

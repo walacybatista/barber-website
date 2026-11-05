@@ -1,0 +1,47 @@
+---
+import type { Slot } from '@/lib/agendar';
+
+interface Props {
+  groups: { period: string; slots: Slot[] }[];
+  selected?: string;
+  /** Data por extenso, usada no rótulo do grupo. */
+  dateLabel: string;
+  name?: string;
+}
+const { groups, selected, dateLabel, name = 'hora' } = Astro.props;
+const total = groups.reduce((n, g) => n + g.slots.length, 0);
+---
+
+<div role="group" aria-label={`Horários disponíveis em ${dateLabel}`}>
+  <p class="text-text-muted mb-4 text-sm">
+    {total} {total === 1 ? 'horário disponível' : 'horários disponíveis'}
+  </p>
+  <div class="space-y-6">
+    {groups.map((g, gi) => (
+      <fieldset>
+        <legend class="text-h3 mb-3 font-semibold">{g.period}</legend>
+        <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+          {g.slots.map((s, si) => (
+            <label class="group bg-surface border-border-strong hover:bg-surface-2 has-[:checked]:bg-primary has-[:checked]:border-primary has-[:checked]:text-on-primary has-[:focus-visible]:outline-focus flex min-h-12 min-w-11 cursor-pointer items-center justify-center gap-1 rounded-sm border font-medium has-[:focus-visible]:outline-[3px] has-[:focus-visible]:outline-offset-2">
+              <input
+                type="radio"
+                name={name}
+                value={s.iso}
+                checked={s.iso === selected}
+                required={gi === 0 && si === 0}
+                class="sr-only"
+              />
+              <span class="hidden group-has-[:checked]:inline" aria-hidden="true">
+                ✓
+              </span>
+              {s.label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    ))}
+  </div>
+  <p class="text-text-muted mt-4 text-sm">
+    Só mostramos horários livres. O horário escolhido fica destacado em cobre.
+  </p>
+</div>

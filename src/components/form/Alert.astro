@@ -1,0 +1,43 @@
+---
+type Variant = 'error' | 'warning' | 'info' | 'success';
+
+interface Props {
+  variant?: Variant;
+  title: string;
+  id?: string;
+  class?: string;
+  'data-autofocus'?: boolean;
+}
+const { variant = 'info', title, id, class: className = '', ...rest } = Astro.props;
+
+// Design 6.16: erro = role="alert"; sucesso/aviso/info = role="status".
+const role = variant === 'error' ? 'alert' : 'status';
+const styles: Record<Variant, { box: string; title: string; icon: string }> = {
+  error: { box: 'bg-error-bg border-error', title: 'text-error', icon: '!' },
+  warning: { box: 'bg-warning-bg border-warning', title: 'text-warning', icon: '!' },
+  success: { box: 'bg-success-bg border-success', title: 'text-success', icon: '✓' },
+  info: { box: 'bg-surface-2 border-focus', title: 'text-focus', icon: 'i' },
+};
+const s = styles[variant];
+---
+
+<div
+  id={id}
+  role={role}
+  class={`rounded-lg border p-4 ${s.box} ${className}`.trim()}
+  tabindex="-1"
+  {...rest}
+>
+  <p class={`flex items-center gap-2 font-semibold ${s.title}`}>
+    <span
+      aria-hidden="true"
+      class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs leading-none"
+    >
+      {s.icon}
+    </span>
+    {title}
+  </p>
+  <div class="text-text mt-1">
+    <slot />
+  </div>
+</div>

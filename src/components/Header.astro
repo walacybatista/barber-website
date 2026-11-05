@@ -15,30 +15,33 @@ const links = [
 ---
 
 <header class="bg-surface border-border-subtle z-40 border-b" data-header>
-  <Container class="flex min-h-16 flex-wrap items-center justify-between gap-x-3">
+  <Container class="flex min-h-16 flex-wrap items-center gap-x-3 md:gap-x-6">
     <a href="/" class="font-display text-xl font-bold tracking-tight">
       {business.shortName}
     </a>
 
-    <div class="flex items-center gap-2 md:gap-6">
-      <nav aria-label="Principal" class="order-last basis-full md:order-none md:basis-auto">
-        <ul
-          id="menu-principal"
-          data-menu-panel
-          class="flex flex-col py-2 md:flex-row md:items-center md:gap-1 md:py-0"
-        >
-          {links.map((l) => (
-            <li>
-              <a
-                href={l.href}
-                class="hover:text-primary flex min-h-12 items-center px-1 text-lg md:min-h-11 md:px-3 md:text-base"
-              >
-                {l.label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
+    <nav
+      aria-label="Principal"
+      class="order-last basis-full md:order-none md:ml-auto md:basis-auto"
+    >
+      <ul
+        id="menu-principal"
+        data-menu-panel
+        class="flex flex-col py-2 md:flex-row md:items-center md:gap-1 md:py-0"
+      >
+        {links.map((l) => (
+          <li>
+            <a
+              href={l.href}
+              class="hover:text-primary flex min-h-12 items-center px-1 text-lg md:min-h-11 md:px-3 md:text-base"
+            >
+              {l.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+    <div class="ml-auto flex items-center gap-2 md:ml-0">
       <Button href="/agendar" class="min-h-11 px-4 md:px-5">
         Agendar
       </Button>

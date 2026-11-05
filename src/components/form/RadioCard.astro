@@ -1,0 +1,51 @@
+---
+interface Props {
+  name: string;
+  value: string;
+  checked?: boolean;
+  disabled?: boolean;
+  required?: boolean;
+  /** Texto extra de estado (ex.: "Indisponível neste dia"), lido pelo leitor de tela. */
+  hint?: string;
+  class?: string;
+}
+const {
+  name,
+  value,
+  checked = false,
+  disabled = false,
+  required = false,
+  hint,
+  class: className = '',
+} = Astro.props;
+---
+
+<label
+  class:list={[
+    'group bg-surface border-border-strong flex min-h-16 cursor-pointer items-center gap-3 rounded-md border p-4',
+    'hover:bg-surface-2 has-[:checked]:border-primary has-[:checked]:bg-surface-2 has-[:checked]:border-2',
+    'has-[:focus-visible]:outline-focus has-[:focus-visible]:outline-[3px] has-[:focus-visible]:outline-offset-2',
+    'has-[:disabled]:bg-surface-2 has-[:disabled]:text-disabled has-[:disabled]:cursor-not-allowed',
+    className,
+  ]}
+>
+  <input
+    type="radio"
+    name={name}
+    value={value}
+    checked={checked}
+    disabled={disabled}
+    required={required}
+    class="sr-only"
+  />
+  <span
+    aria-hidden="true"
+    class="border-border-strong group-has-[:checked]:border-primary group-has-[:checked]:bg-primary text-on-primary inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-sm font-bold"
+  >
+    <span class="hidden group-has-[:checked]:inline">✓</span>
+  </span>
+  <span class="flex-1">
+    <slot />
+  </span>
+  {hint && <span class="text-text-muted text-sm">{hint}</span>}
+</label>

@@ -5,6 +5,9 @@ import { loginAttempts } from '../db/schema.ts';
 /** Janela máxima usada por qualquer bucket; registros mais antigos são descartados. */
 const RETENTION_MS = 60 * 60 * 1000;
 
+/** Chance de executar a limpeza a cada consumo (1 em 20). */
+export const CLEANUP_PROBABILITY = 1 / 20;
+
 export class RateLimitedError extends Error {
   constructor() {
     super('Muitas tentativas. Tente novamente em alguns minutos.');
@@ -27,6 +30,7 @@ export async function consumeRateLimit(
   db: Db,
   buckets: Bucket[],
   now: Date = new Date(),
+  random: () => number = Math.random,
 ): Promise<number[]> {
   const sorted = [...buckets].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const ids = await db.transaction(async (tx) => {
@@ -51,11 +55,17 @@ export async function consumeRateLimit(
     }
     return buckets.map((b) => out.get(b.key)!);
   });
-  // Limpeza oportunista fora da transação (best effort).
-  await db
-    .delete(loginAttempts)
-    .where(
-      sql`${loginAttempts.attemptedAt} < ${new Date(now.getTime() - RETENTION_MS).toISOString()}::timestamptz`,
-    );
+  // Limpeza oportunista fora da transação: best effort, nunca derruba o chamador.
+  if (random() < CLEANUP_PROBABILITY) {
+    try {
+      await db
+        .delete(loginAttempts)
+        .where(
+          sql`${loginAttempts.attemptedAt} < ${new Date(now.getTime() - RETENTION_MS).toISOString()}::timestamptz`,
+        );
+    } catch {
+      // ignorado: a próxima limpeza tenta de novo
+    }
+  }
   return ids;
 }

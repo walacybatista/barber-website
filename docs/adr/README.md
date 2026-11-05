@@ -13,3 +13,4 @@ Formato: contexto → decisão → alternativas → consequências. Uma decisão
 | [007](0007-auth-admin.md) | 2026-11-05 | Autenticação do admin com sessão em banco, sem biblioteca | Aceita |
 | [008](0008-gerenciamento-por-token.md) | 2026-11-05 | Cliente gerencia agendamento por link com token | Aceita |
 | [009](0009-noindex-portfolio.md) | 2026-11-05 | Site fictício não indexável por padrão (`PUBLIC_NOINDEX`) | Aceita |
+| [010](0010-fluxo-agendamento-server-side.md) | 2026-11-05 | Fluxo de agendamento renderizado no servidor (sem JS obrigatório) | Aceita |

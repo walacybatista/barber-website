@@ -1,0 +1,40 @@
+---
+import ExternalLink from '../ExternalLink.astro';
+import FieldError from './FieldError.astro';
+
+interface Props {
+  id: string;
+  name: string;
+  error?: string;
+}
+const { id, name, error } = Astro.props;
+const errorId = error ? `${id}-erro` : undefined;
+---
+
+<div>
+  <label
+    for={id}
+    class:list={[
+      'flex min-h-11 cursor-pointer items-start gap-3 rounded-md py-2',
+      error && 'border-error border-l-2 pl-3',
+    ]}
+  >
+    <input
+      id={id}
+      type="checkbox"
+      name={name}
+      required
+      aria-invalid={error ? 'true' : undefined}
+      aria-describedby={errorId}
+      class="bg-surface border-border-strong accent-primary focus-visible:outline-focus mt-0.5 h-6 w-6 shrink-0 rounded-sm focus-visible:outline-[3px] focus-visible:outline-offset-2"
+    />
+    <span>
+      Li e concordo com a
+      <ExternalLink href="/privacidade" class="prose-link">
+        Política de Privacidade
+      </ExternalLink>
+      e com o uso do meu nome e telefone para este agendamento.
+    </span>
+  </label>
+  <FieldError id={errorId ?? `${id}-erro`} message={error} />
+</div>

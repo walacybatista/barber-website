@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Db } from '../../db/client.ts';
 import {
@@ -9,8 +9,9 @@ import {
   services,
   timeBlocks,
 } from '../../db/schema.ts';
-import { DEFAULT_TIMEZONE, localToUtc } from '../time/tz.ts';
+import { DEFAULT_TIMEZONE, isValidLocalDate, localToUtc, utcToLocalDate } from '../time/tz.ts';
 import {
+  BlockConflictError,
   InvalidInputError,
   InvalidSlotError,
   InvalidStateError,
@@ -20,6 +21,7 @@ import {
   TooManyBookingsError,
 } from './errors.ts';
 import {
+  bookingWindow,
   canManage,
   checkBookingStart,
   computeAvailableSlots,
@@ -41,12 +43,7 @@ export const MAX_FUTURE_BOOKINGS_PER_PHONE = 3;
 
 /** `23P01` = exclusion_violation. O Drizzle embrulha o erro do driver em `cause`. */
 export function isExclusionViolation(err: unknown): boolean {
-  let cur: unknown = err;
-  for (let i = 0; i < 5 && cur; i++) {
-    if ((cur as { code?: string }).code === '23P01') return true;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return false;
+  return hasPgCode(err, '23P01');
 }
 
 function hasPgCode(err: unknown, code: string): boolean {
@@ -110,6 +107,12 @@ async function loadHours(db: Executor): Promise<OpeningHour[]> {
   return toOpeningHours(rows);
 }
 
+/** Data local seguinte (`YYYY-MM-DD`), por aritmética de calendário. */
+function nextLocalDate(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
 async function loadService(db: Executor, serviceId: number) {
   const [s] = await db
     .select()
@@ -136,6 +139,12 @@ export async function listAvailability(
 ): Promise<AvailableSlot[]> {
   const now = input.now ?? new Date();
   const timezone = input.timezone ?? DEFAULT_TIMEZONE;
+  if (!isValidLocalDate(input.date)) throw new InvalidInputError('Data inválida.');
+  // Fora da janela (RN03) não há horário: evita consultar o banco para datas passadas/remotas.
+  const { earliest, latest } = bookingWindow(now);
+  const dayStartUtc = localToUtc(input.date, '00:00', timezone);
+  const dayEndUtc = localToUtc(nextLocalDate(input.date), '00:00', timezone);
+  if (dayEndUtc <= earliest || dayStartUtc > latest) return [];
   const service = await loadService(db, input.serviceId);
 
   const barberRows = await db
@@ -197,7 +206,7 @@ export async function listAvailability(
 
 export type CreateBookingInput = {
   serviceId: number;
-  /** `null` = sem preferência: tenta os barbeiros ativos em ordem de id. */
+  /** `null` = sem preferência: tenta os barbeiros ativos, do menos ao mais carregado no dia. */
   barberId: number | null;
   startAt: Date;
   customerName: string;
@@ -297,7 +306,7 @@ export async function createBooking(
   });
   if (check !== 'ok') throw new InvalidSlotError(check);
 
-  const candidates = await db
+  let candidates = await db
     .select({ id: barbers.id })
     .from(barbers)
     .where(
@@ -306,7 +315,32 @@ export async function createBooking(
         : eq(barbers.active, true),
     )
     .orderBy(asc(barbers.id));
-  if (candidates.length === 0) throw new NotFoundError('Barbeiro');
+  if (candidates.length === 0) {
+    // Barbeiro específico inexistente/inativo: não encontrado. "Sem preferência" e ninguém ativo:
+    // nenhum horário disponível.
+    if (input.barberId === null) throw new SlotTakenError();
+    throw new NotFoundError('Barbeiro');
+  }
+  if (input.barberId === null && candidates.length > 1) {
+    // Sem preferência: o barbeiro com MENOS confirmados no dia local; empate pelo menor id.
+    const tz = input.timezone ?? DEFAULT_TIMEZONE;
+    const day = utcToLocalDate(input.startAt, tz);
+    const rows = await db
+      .select({ barberId: bookings.barberId, n: sql<number>`count(*)::int` })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.status, 'confirmed'),
+          gte(bookings.startAt, localToUtc(day, '00:00', tz)),
+          lt(bookings.startAt, localToUtc(nextLocalDate(day), '00:00', tz)),
+        ),
+      )
+      .groupBy(bookings.barberId);
+    const load = new Map(rows.map((r) => [r.barberId, r.n]));
+    candidates = [...candidates].sort(
+      (a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0) || a.id - b.id,
+    );
+  }
 
   const endAt = new Date(input.startAt.getTime() + service.durationMin * MIN);
   for (const c of candidates) {
@@ -422,16 +456,17 @@ export async function rescheduleBooking(
       await lockBarber(tx, b.barberId);
       if (b.status !== 'confirmed') throw new InvalidStateError();
       if (!canManage(b.startAt, now)) throw new TooLateError();
-      const service = await loadService(tx, b.serviceId);
+      // Duração ORIGINAL do agendamento (o serviço pode ter sido editado ou desativado depois).
+      const durationMin = Math.round((b.endAt.getTime() - b.startAt.getTime()) / MIN);
       const check = checkBookingStart({
         start: newStartAt,
-        durationMin: service.durationMin,
+        durationMin,
         openingHours: await loadHours(tx),
         now,
         timezone: opts.timezone,
       });
       if (check !== 'ok') throw new InvalidSlotError(check);
-      const newEnd = new Date(newStartAt.getTime() + service.durationMin * MIN);
+      const newEnd = new Date(newStartAt.getTime() + durationMin * MIN);
       await tx.delete(busyPeriods).where(eq(busyPeriods.bookingId, b.id));
       await tx.insert(busyPeriods).values({
         barberId: b.barberId,
@@ -469,6 +504,11 @@ export async function markBookingStatus(
     const [b] = await tx.select().from(bookings).where(eq(bookings.id, bookingId)).for('update');
     if (!b) throw new NotFoundError('Agendamento');
     if (!TRANSITIONS[b.status].includes(status)) throw new InvalidStateError();
+    if ((status === 'completed' || status === 'no_show') && b.startAt > now) {
+      throw new InvalidStateError(
+        'Não é possível concluir ou marcar falta de um atendimento futuro.',
+      );
+    }
     if (status === 'cancelled') {
       await tx.delete(busyPeriods).where(eq(busyPeriods.bookingId, b.id));
     }
@@ -483,7 +523,7 @@ export async function markBookingStatus(
 
 // ---------- Bloqueios ----------
 
-/** Conflito com agendamento ou outro bloqueio vira SlotTakenError (cancele o agendamento antes). */
+/** Conflito com agendamento ou outro bloqueio vira BlockConflictError (cancele o agendamento antes). */
 export async function createTimeBlock(
   db: Db,
   input: {
@@ -521,7 +561,7 @@ export async function createTimeBlock(
       return blk;
     });
   } catch (err) {
-    if (isExclusionViolation(err)) throw new SlotTakenError();
+    if (isExclusionViolation(err)) throw new BlockConflictError();
     throw err;
   }
 }
@@ -583,7 +623,14 @@ export async function listAgenda(
 
 // ---------- LGPD (RN06) ----------
 
-/** Anonimiza agendamentos encerrados há mais de `days` dias. Invalida o link (token trocado). */
+/** Cancelados são anonimizados mais cedo: 30 dias após `cancelledAt`. */
+export const CANCELLED_RETENTION_DAYS = 30;
+
+/**
+ * Anonimiza agendamentos encerrados há mais de `days` dias (e cancelados há mais de 30 dias após o
+ * cancelamento) e limpa o motivo de bloqueios antigos. Invalida o link (token trocado).
+ * Retorna o número de agendamentos anonimizados.
+ */
 export async function anonymizeOldBookings(
   db: Db,
   opts: { days?: number; now?: Date } = {},
@@ -591,15 +638,30 @@ export async function anonymizeOldBookings(
   const days = opts.days ?? 90;
   const now = opts.now ?? new Date();
   const cutoff = new Date(now.getTime() - days * 24 * 60 * MIN);
-  const rows = await db
-    .update(bookings)
-    .set({
-      customerName: 'Anonimizado',
-      customerPhone: '',
-      manageTokenHash: sql`encode(sha256(convert_to(gen_random_uuid()::text, 'UTF8')), 'hex')`,
-      anonymizedAt: now,
-    })
-    .where(and(lt(bookings.endAt, cutoff), sql`${bookings.anonymizedAt} is null`))
-    .returning({ id: bookings.id });
-  return rows.length;
+  const cancelledCutoff = new Date(now.getTime() - CANCELLED_RETENTION_DAYS * 24 * 60 * MIN);
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .update(bookings)
+      .set({
+        customerName: 'Anonimizado',
+        customerPhone: '',
+        manageTokenHash: sql`encode(sha256(convert_to(gen_random_uuid()::text, 'UTF8')), 'hex')`,
+        anonymizedAt: now,
+      })
+      .where(
+        and(
+          sql`${bookings.anonymizedAt} is null`,
+          or(
+            and(eq(bookings.status, 'cancelled'), lt(bookings.cancelledAt, cancelledCutoff)),
+            and(sql`${bookings.status} <> 'cancelled'`, lt(bookings.endAt, cutoff)),
+          ),
+        ),
+      )
+      .returning({ id: bookings.id });
+    await tx
+      .update(timeBlocks)
+      .set({ reason: '' })
+      .where(and(lt(timeBlocks.endAt, cutoff), sql`${timeBlocks.reason} <> ''`));
+    return rows.length;
+  });
 }

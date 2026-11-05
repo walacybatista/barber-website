@@ -1,0 +1,20 @@
+---
+interface Props {
+  /** id referenciado por aria-describedby do campo. */
+  id: string;
+  message?: string;
+}
+const { id, message } = Astro.props;
+---
+
+{message && (
+  <p id={id} class="text-error mt-2 flex items-start gap-2 text-sm">
+    <span
+      aria-hidden="true"
+      class="border-error mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-xs leading-none font-bold"
+    >
+      !
+    </span>
+    <span>{message}</span>
+  </p>
+)}

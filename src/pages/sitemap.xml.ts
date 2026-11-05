@@ -3,8 +3,8 @@ import { siteUrl } from '@/lib/site';
 
 export const prerender = true;
 
-/** Páginas públicas indexáveis. /agendar entra quando existir. */
-const paths = ['/', '/privacidade'];
+/** Páginas públicas indexáveis. /agendamento/* (token) fica de fora de propósito. */
+const paths = ['/', '/agendar', '/privacidade'];
 
 export const GET: APIRoute = ({ site }) => {
   const base = siteUrl(site);

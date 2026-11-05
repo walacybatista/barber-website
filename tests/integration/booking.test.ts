@@ -2,6 +2,7 @@ import { sql as dsql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { barbers, bookings, busyPeriods } from '../../src/db/schema.ts';
 import {
+  BlockConflictError,
   InvalidSlotError,
   SlotTakenError,
   TooLateError,
@@ -107,7 +108,7 @@ describe('RN01 conflito no banco (ADR-006)', () => {
     await expect(book({ time: '13:00' })).resolves.toBeDefined();
     await expect(
       createTimeBlock(db, { barberId: ctx.b1.id, startAt: at('13:15'), endAt: at('14:00') }),
-    ).rejects.toBeInstanceOf(SlotTakenError);
+    ).rejects.toBeInstanceOf(BlockConflictError);
   });
 
   it('remover bloqueio libera o horário', async () => {
@@ -233,7 +234,7 @@ describe('disponibilidade, agenda e status', () => {
     const rows = await listAgenda(db, { barberId: ctx.b1.id, from: at('00:00'), to: at('23:59') });
     expect(rows.bookings).toHaveLength(1);
     expect(rows.bookings[0].customerPhone).toBe('11912345678');
-    await markBookingStatus(db, booking.id, 'no_show');
+    await markBookingStatus(db, booking.id, 'no_show', at('12:00'));
     await expect(markBookingStatus(db, booking.id, 'cancelled')).rejects.toMatchObject({
       code: 'INVALID_STATE',
     });

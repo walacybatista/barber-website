@@ -3,7 +3,7 @@ import { eq, inArray } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { adminUsers, loginAttempts } from '../../db/schema.ts';
 import { RateLimitedError, consumeRateLimit } from '../rate-limit.ts';
-import { hashPassword, verifyPassword } from './password.ts';
+import { hashPassword, needsRehash, verifyPassword } from './password.ts';
 import { createSession } from './sessions.ts';
 
 export { RateLimitedError };
@@ -73,6 +73,17 @@ export async function login(
   // Sucesso: zera o contador do par e devolve a unidade dos buckets por IP/usuário.
   await db.delete(loginAttempts).where(eq(loginAttempts.key, pairKey));
   await db.delete(loginAttempts).where(inArray(loginAttempts.id, [ipRowId, userRowId]));
+  // Rehash transparente: hash antigo (parâmetros mais fracos) é regravado com os atuais. Best effort.
+  if (needsRehash(user.passwordHash)) {
+    try {
+      await db
+        .update(adminUsers)
+        .set({ passwordHash: await hashPassword(input.password) })
+        .where(eq(adminUsers.id, user.id));
+    } catch {
+      // login segue; tenta de novo no próximo
+    }
+  }
   const { sessionId, expiresAt } = await createSession(db, user.id, now);
   return { sessionId, expiresAt, user: { id: user.id, username: user.username } };
 }

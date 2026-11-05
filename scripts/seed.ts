@@ -1,4 +1,7 @@
 // Uso: npm run db:seed  (idempotente: upsert por slug; horários são substituídos)
+// business.ts é a fonte da verdade do catálogo: itens presentes ficam active=true (reativa quem
+// voltou) e itens removidos ficam inativos. Consequência: desativação manual feita pelo admin
+// será sobrescrita ao rodar o seed (o CRUD do admin é v1.1; até lá não há desativação manual).
 import { count, notInArray } from 'drizzle-orm';
 import { createDb, loadDotEnv, readEnv } from '../src/db/client.ts';
 import { barbers, openingHours, services } from '../src/db/schema.ts';

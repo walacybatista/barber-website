@@ -1,0 +1,67 @@
+---
+import FieldError from './FieldError.astro';
+
+interface Props {
+  id: string;
+  name: string;
+  label: string;
+  type?: 'text' | 'tel';
+  value?: string;
+  help?: string;
+  error?: string;
+  autocomplete?: string;
+  inputmode?: 'text' | 'tel';
+  required?: boolean;
+  maxlength?: number;
+  minlength?: number;
+}
+const {
+  id,
+  name,
+  label,
+  type = 'text',
+  value = '',
+  help,
+  error,
+  autocomplete,
+  inputmode,
+  required = true,
+  maxlength,
+  minlength,
+} = Astro.props;
+
+const helpId = help ? `${id}-ajuda` : undefined;
+const errorId = error ? `${id}-erro` : undefined;
+const describedBy = [helpId, errorId].filter(Boolean).join(' ') || undefined;
+---
+
+<div>
+  <label for={id} class="mb-1 block font-medium">
+    {label}
+  </label>
+  {help && (
+    <p id={helpId} class="text-text-muted mb-2 text-sm">
+      {help}
+    </p>
+  )}
+  <input
+    id={id}
+    name={name}
+    type={type}
+    value={value}
+    autocomplete={autocomplete}
+    inputmode={inputmode}
+    required={required}
+    maxlength={maxlength}
+    minlength={minlength}
+    aria-invalid={error ? 'true' : undefined}
+    aria-describedby={describedBy}
+    class:list={[
+      'bg-surface text-text placeholder:text-text-muted min-h-12 w-full rounded-md px-3',
+      'hover:border-text-muted focus:border-focus focus:outline-focus focus:outline-[3px] focus:outline-offset-0',
+      'disabled:bg-surface-2 disabled:text-disabled disabled:cursor-not-allowed',
+      error ? 'border-error border-2' : 'border-border-strong border',
+    ]}
+  />
+  <FieldError id={errorId ?? `${id}-erro`} message={error} />
+</div>

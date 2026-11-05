@@ -200,11 +200,20 @@ describe('RN04 canManage', () => {
 });
 
 describe('normalizePhone', () => {
-  it('normaliza para dígitos e valida 10–13', () => {
+  it('canonicaliza: só dígitos nacionais, sem 55', () => {
     expect(normalizePhone('(11) 91234-5678')).toBe('11912345678');
-    expect(normalizePhone('+55 11 91234-5678')).toBe('5511912345678');
+    expect(normalizePhone('+55 11 91234-5678')).toBe('11912345678');
+    expect(normalizePhone('55 (11) 3123-4567')).toBe('1131234567');
+    expect(normalizePhone('11 3123-4567')).toBe('1131234567');
+  });
+  it('rejeita tamanho, DDD e celular inválidos', () => {
     expect(normalizePhone('1234')).toBeNull();
     expect(normalizePhone('1'.repeat(14))).toBeNull();
+    expect(normalizePhone('5511912')).toBeNull();
+    expect(normalizePhone('(10) 91234-5678')).toBeNull(); // DDD < 11
+    expect(normalizePhone('(11) 81234-5678')).toBeNull(); // celular sem 9
+    expect(normalizePhone('551191234567890')).toBeNull(); // 15 dígitos
+    expect(normalizePhone('55111234567')).toBeNull(); // 11 dígitos: DDD 55, não começa com 9
   });
 });
 

@@ -48,10 +48,24 @@ function toActionError(err: unknown): never {
   throw err;
 }
 
-/** Revalida a sessão no servidor (não confia só no middleware). */
+/**
+ * Revalida a sessão no servidor (não confia só no middleware). Falha do banco vira 503
+ * (SERVICE_UNAVAILABLE) genérico, sem stack. Nas Actions admin o Astro valida o `input` (zod)
+ * antes do handler: é inevitável e aceitável (só parse, sem acesso a dados); o handler chama
+ * `requireAdmin` antes de qualquer outro trabalho.
+ */
 async function requireAdmin(context: ActionAPIContext) {
   const sid = context.cookies.get(SESSION_COOKIE)?.value;
-  const session = await validateSession(getDb(), sid);
+  let session;
+  try {
+    session = await validateSession(getDb(), sid);
+  } catch (err) {
+    console.error('requireAdmin: falha ao carregar sessão', err instanceof Error ? err.name : err);
+    throw new ActionError({
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'Serviço temporariamente indisponível. Tente novamente.',
+    });
+  }
   if (!session) {
     throw new ActionError({ code: 'UNAUTHORIZED', message: 'Sessão inválida ou expirada.' });
   }
@@ -73,12 +87,13 @@ const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const isoInstant = z.iso.datetime({ offset: true }).transform((s) => new Date(s));
 const barberIdOrNull = z.number().int().positive().nullable().optional();
 
+// Aceita "(11) 91234-5678": remove a máscara aqui (a Action é a fronteira; normalizePhone valida DDD/tamanho).
 const phone = z
-  .string()
-  .max(30)
+  .string({ error: 'Informe um telefone com DDD.' })
+  .max(30, 'Telefone inválido.')
   .transform((v, ctx) => {
-    const n = normalizePhone(v);
-    if (!n) ctx.issues.push({ code: 'custom', message: 'Telefone inválido.', input: v });
+    const n = normalizePhone(v.replace(/\D/g, ''));
+    if (!n) ctx.issues.push({ code: 'custom', message: 'Informe um telefone com DDD.', input: v });
     return n ?? '';
   });
 
@@ -106,14 +121,25 @@ export const server = {
     },
   }),
 
+  // accept: 'form' (ADR-010): o fluxo /agendar posta FormData e funciona sem JavaScript.
+  // Campos ausentes/vazios chegam como null (barberId vazio = "sem preferência"); checkbox marcado = 'on'.
   createBooking: defineAction({
+    accept: 'form',
     input: z.object({
-      serviceId: z.number().int().positive(),
+      serviceId: z.number({ error: 'Escolha um serviço.' }).int().positive(),
       barberId: z.number().int().positive().nullable(),
-      startAt: isoInstant,
-      customerName: z.string().trim().min(2).max(80),
+      startAt: z.iso
+        .datetime({ offset: true, error: 'Escolha um horário.' })
+        .transform((s) => new Date(s)),
+      customerName: z
+        .string({ error: 'Informe seu nome.' })
+        .trim()
+        .min(2, 'Informe seu nome (mínimo 2 letras).')
+        .max(80, 'Nome muito longo (máximo 80 caracteres).'),
       customerPhone: phone,
-      consent: z.literal(true, { error: 'É necessário aceitar o uso dos dados.' }),
+      consent: z
+        .literal('on', { error: 'Para agendar, precisamos do seu consentimento.' })
+        .transform(() => true as const),
     }),
     handler: async (input, context) => {
       try {

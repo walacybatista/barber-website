@@ -9,8 +9,8 @@ export class DomainError extends Error {
 }
 
 export class SlotTakenError extends DomainError {
-  constructor() {
-    super('SLOT_TAKEN', 'Esse horário acabou de ser reservado.');
+  constructor(message = 'Esse horário acabou de ser reservado.') {
+    super('SLOT_TAKEN', message);
   }
 }
 
@@ -54,6 +54,18 @@ export class TooManyBookingsError extends DomainError {
     super(
       'TOO_MANY_BOOKINGS',
       `Você já tem ${max} agendamentos futuros. Cancele um ou aguarde para marcar outro.`,
+    );
+  }
+}
+
+/**
+ * Bloqueio de agenda sobre horário já ocupado (agendamento ou outro bloqueio). Mantém o código
+ * `SLOT_TAKEN` (e a superclasse) para o mapeamento HTTP existente; a mensagem é para o admin.
+ */
+export class BlockConflictError extends SlotTakenError {
+  constructor() {
+    super(
+      'Já existe agendamento ou bloqueio nesse período. Cancele o agendamento antes de bloquear.',
     );
   }
 }

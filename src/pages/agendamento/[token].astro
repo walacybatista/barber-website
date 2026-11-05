@@ -1,0 +1,103 @@
+---
+/** Página mínima do agendamento (a gestão completa vem na próxima tarefa). Token só no caminho; nunca em query. */
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import Button from '@/components/Button.astro';
+import Container from '@/components/Container.astro';
+import Alert from '@/components/form/Alert.astro';
+import { getDb } from '@/db/client';
+import { getBookingByToken } from '@/lib/booking/repository';
+import { formatDateTimeLong } from '@/lib/agendar';
+import { formatBRL } from '@/lib/format';
+
+export const prerender = false;
+
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+const token = Astro.params.token ?? '';
+const isNew = Astro.url.searchParams.get('novo') === '1';
+
+let booking = null;
+let failed = false;
+if (/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
+  try {
+    booking = await getBookingByToken(getDb(), token);
+  } catch (err) {
+    console.error('[agendamento] falha ao buscar agendamento', err);
+    failed = true;
+  }
+}
+Astro.response.status = failed ? 503 : booking ? 200 : 404;
+---
+
+<BaseLayout
+  title={booking ? 'Seu agendamento — Cobre Velho' : 'Agendamento não encontrado — Cobre Velho'}
+  noindex
+  minimal
+>
+  <Container class="max-w-[40rem] py-8 lg:py-12">
+    {failed ? (
+      <section aria-labelledby="titulo">
+        <h1 id="titulo" class="text-h1 font-bold">
+          Não foi possível carregar
+        </h1>
+        <p class="text-text-muted mt-3">Tente de novo em instantes.</p>
+      </section>
+    ) : !booking ? (
+      <section aria-labelledby="titulo">
+        <h1 id="titulo" class="text-h1 font-bold">
+          Agendamento não encontrado
+        </h1>
+        <p class="text-text-muted mt-3">
+          Confira se o link está completo. Se precisar, faça um novo agendamento.
+        </p>
+        <Button href="/agendar" class="mt-6">
+          Agendar horário
+        </Button>
+      </section>
+    ) : (
+      <section aria-labelledby="titulo">
+        {isNew && booking.status === 'confirmed' && (
+          <Alert variant="success" title="Agendamento confirmado!" class="mb-6">
+            <p>Esperamos você, {booking.customerFirstName}.</p>
+          </Alert>
+        )}
+        <h1 id="titulo" class="text-h1 font-bold">
+          Seu agendamento
+        </h1>
+
+        {booking.status === 'cancelled' && (
+          <Alert variant="warning" title="Este agendamento foi cancelado" class="mt-4" />
+        )}
+
+        <dl class="bg-surface border-border-subtle mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-md border p-5">
+          <dt class="text-text-muted">Nome</dt>
+          <dd>{booking.customerFirstName}</dd>
+          <dt class="text-text-muted">Serviço</dt>
+          <dd>
+            {booking.service.name} · {booking.service.durationMin} min ·{' '}
+            {formatBRL(booking.service.priceCents)}
+          </dd>
+          <dt class="text-text-muted">Barbeiro</dt>
+          <dd>{booking.barber.name}</dd>
+          <dt class="text-text-muted">Quando</dt>
+          <dd>{formatDateTimeLong(booking.startAt, true)}</dd>
+        </dl>
+
+        <Alert variant="info" title="Guarde este link" class="mt-6">
+          <p>
+            Ele é o único jeito de ver este agendamento depois. Não o compartilhe: quem tiver o link
+            acessa o agendamento.
+          </p>
+        </Alert>
+
+        {booking.status === 'confirmed' && (
+          <Button href={`/agendamento/${encodeURIComponent(token)}.ics`} class="mt-6" download>
+            Adicionar à agenda (.ics)
+          </Button>
+        )}
+      </section>
+    )}
+  </Container>
+</BaseLayout>

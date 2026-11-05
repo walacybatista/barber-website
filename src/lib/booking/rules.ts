@@ -114,8 +114,20 @@ export function canManage(startAt: Date, now: Date): boolean {
   return startAt.getTime() - now.getTime() >= MANAGE_CUTOFF_MIN * MIN;
 }
 
-/** Telefone BR normalizado: só dígitos, 10 a 13. `null` se inválido. */
+/**
+ * Telefone BR canônico: só dígitos nacionais (DDD + número), sem o prefixo 55.
+ * Linhas gravadas antes desta canonicalização (com prefixo 55) não são normalizadas/migradas
+ * (só existem em dev).
+ * Aceita 10 dígitos (fixo) ou 11 (celular, começa com 9), DDD 11-99. `null` se inválido.
+ */
 export function normalizePhone(raw: string): string | null {
-  const digits = raw.replace(/\D/g, '');
-  return digits.length >= 10 && digits.length <= 13 ? digits : null;
+  let digits = raw.replace(/\D/g, '');
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
+    digits = digits.slice(2);
+  }
+  if (digits.length !== 10 && digits.length !== 11) return null;
+  const ddd = Number(digits.slice(0, 2));
+  if (ddd < 11 || ddd > 99) return null;
+  if (digits.length === 11 && digits[2] !== '9') return null;
+  return digits;
 }
