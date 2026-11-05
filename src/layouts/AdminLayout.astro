@@ -1,0 +1,70 @@
+---
+/** Layout do painel admin: sem indexação, sem cache, sem WhatsApp/JSON-LD/rodapé público. */
+import '@/styles/global.css';
+import { actions } from 'astro:actions';
+import Container from '@/components/Container.astro';
+import { business } from '@/data/business';
+
+interface Props {
+  title: string;
+  /** Usuário autenticado; sem ele (login) não mostra "Sair". */
+  username?: string | null;
+}
+const { title, username = null } = Astro.props;
+
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+---
+
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#14110f" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      rel="preload"
+      href="/fonts/fraunces-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+  </head>
+  <body class="min-h-screen">
+    <a
+      href="#conteudo"
+      class="bg-primary text-on-primary sr-only z-50 rounded-md px-4 py-3 font-semibold focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+    >
+      Ir para o conteúdo
+    </a>
+    <header class="bg-surface border-border-subtle border-b">
+      <Container class="flex min-h-16 flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2">
+        <p class="font-display text-xl font-bold tracking-tight">Painel · {business.shortName}</p>
+        {username && (
+          <div class="flex items-center gap-3">
+            <span class="text-text-muted text-sm">
+              Olá, <strong class="text-text">{username}</strong>
+            </span>
+            <form method="POST" action={`/admin/login${actions.logout}`}>
+              <button
+                type="submit"
+                class="border-border-strong hover:bg-surface-2 min-h-11 cursor-pointer rounded-md border px-4 font-semibold"
+              >
+                Sair
+              </button>
+            </form>
+          </div>
+        )}
+      </Container>
+    </header>
+    <main id="conteudo" tabindex="-1" class="outline-none">
+      <slot />
+    </main>
+  </body>
+</html>

@@ -43,10 +43,12 @@ const src = new URLSearchParams();
 let bodyRejected = false;
 if (isPost) {
   // Recusa corpo grande ou sem content-length ANTES de ler (evita carregar POST de centenas de MB).
-  const declared = Number(Astro.request.headers.get('content-length') ?? Number.NaN);
-  if (!Number.isFinite(declared) || declared < 0 || declared > MAX_BODY_BYTES) {
+  // Ausente ou inválido (não só dígitos) = 411; acima do limite = 413.
+  const rawLength = Astro.request.headers.get('content-length');
+  const declared = rawLength !== null && /^\d+$/.test(rawLength) ? Number(rawLength) : Number.NaN;
+  if (!Number.isSafeInteger(declared) || declared > MAX_BODY_BYTES) {
     bodyRejected = true;
-    Astro.response.status = declared > MAX_BODY_BYTES ? 413 : 400;
+    Astro.response.status = Number.isNaN(declared) ? 411 : 413;
   } else {
     try {
       const fd = await Astro.request.formData();
@@ -83,8 +85,10 @@ try {
   Astro.response.status = 503;
 }
 
-const notices: string[] = [];
-if (bodyRejected) notices.push('Não foi possível processar o envio. Tente de novo.');
+const notices: { title: string; text: string }[] = [];
+const notice = (text: string, title = 'Ajustamos sua escolha') => notices.push({ title, text });
+if (bodyRejected)
+  notice('Não foi possível processar o envio. Tente de novo.', 'Envio não processado');
 let formAlert:
   { variant: 'error' | 'warning'; title: string; text: string; whatsapp?: boolean } | undefined;
 let slotTaken = false;
@@ -103,26 +107,24 @@ const openWeekdays = new Set((catalog?.openingHours ?? []).map((h) => h.weekday)
 
 const service = services.find((s) => s.slug === src.get('servico'));
 if (src.get('servico') && !service && catalog) {
-  notices.push('Não encontramos o serviço informado. Escolha um da lista.');
+  notice('Não encontramos o serviço informado. Escolha um da lista.');
 }
 const barberParam = src.get('barbeiro');
 const barber: 'any' | (typeof barbers)[number] | undefined =
   barberParam === 'qualquer' ? 'any' : barbers.find((b) => b.slug === barberParam);
 if (barberParam && !barber && catalog) {
-  notices.push('Não encontramos o barbeiro informado. Escolha um da lista.');
+  notice('Não encontramos o barbeiro informado. Escolha um da lista.');
 }
 
 let date: string | undefined;
 const dateParam = src.get('data');
 if (service && barber && dateParam) {
   if (!isValidLocalDate(dateParam)) {
-    notices.push('Data inválida. Escolha uma data da lista.');
+    notice('Data inválida. Escolha uma data da lista.');
   } else if (!isDateInWindow(dateParam, now)) {
-    notices.push(
-      'Essa data está fora do período de agendamento (hoje até 30 dias). Escolha outra.',
-    );
+    notice('Essa data está fora do período de agendamento (hoje até 30 dias). Escolha outra.');
   } else if (!openWeekdays.has(weekdayOf(dateParam))) {
-    notices.push('Não abrimos nesse dia. Escolha outra data.');
+    notice('Não abrimos nesse dia. Escolha outra data.');
   } else {
     date = dateParam;
   }
@@ -140,7 +142,7 @@ if (err) {
     if (fieldErrors.serviceId || fieldErrors.startAt || fieldErrors.barberId) {
       fieldErrors = {};
       horaParam = null;
-      notices.push('Houve um problema com o horário escolhido. Escolha novamente.');
+      notice('Houve um problema com o horário escolhido. Escolha novamente.');
     }
   } else if (err.code === 'CONFLICT') {
     slotTaken = true;
@@ -154,12 +156,16 @@ if (err) {
       text: err.message,
       whatsapp: true,
     };
-  } else if (err.code !== 'INTERNAL_SERVER_ERROR') {
+  } else if (Object.hasOwn(CLIENT_ERRORS, err.code) || (err.status >= 400 && err.status < 500)) {
     // Erros do cliente (BAD_REQUEST, FORBIDDEN, NOT_FOUND, 413, 415...): 4xx e aviso genérico.
-    Astro.response.status = CLIENT_ERRORS[err.code] ?? 400;
-    notices.push('Não foi possível concluir o envio. Confira suas escolhas e tente de novo.');
+    Astro.response.status = Object.hasOwn(CLIENT_ERRORS, err.code) ? CLIENT_ERRORS[err.code] : 400;
+    notice(
+      'Não foi possível concluir o envio. Confira suas escolhas e tente de novo.',
+      'Envio não concluído',
+    );
   } else {
-    Astro.response.status = 500;
+    // INTERNAL_SERVER_ERROR, SERVICE_UNAVAILABLE etc.: erro de servidor, nunca 4xx.
+    Astro.response.status = err.code === 'INTERNAL_SERVER_ERROR' ? 500 : 503;
     formAlert = {
       variant: 'error',
       title: 'Algo deu errado',
@@ -191,7 +197,7 @@ if (horaParam && date) {
   if (parsed && slots.some((s) => s.start.getTime() === parsed.getTime())) {
     hora = parsed;
   } else if (!slotsError && !slotTaken) {
-    notices.push('Esse horário não está mais disponível. Escolha outro.');
+    notice('Esse horário não está mais disponível. Escolha outro.');
   }
 }
 
@@ -309,8 +315,8 @@ const pageTitle = step <= 4 ? `Agendar: ${stepTitles[step - 1]}` : 'Agendar';
           </Alert>
         )}
         {notices.map((n) => (
-          <Alert variant="warning" title="Ajustamos sua escolha" class="mb-6">
-            <p>{n}</p>
+          <Alert variant="warning" title={n.title} class="mb-6">
+            <p>{n.text}</p>
           </Alert>
         ))}
 

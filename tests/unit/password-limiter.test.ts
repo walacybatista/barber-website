@@ -44,3 +44,22 @@ describe('scrypt do processo', () => {
     expect(results[3]).toBe(false);
   }, 30_000);
 });
+
+describe('createLimiter: falha com fila', () => {
+  it('tarefa que falha passa a vaga para a próxima da fila', async () => {
+    const limiter = createLimiter(1);
+    const order: string[] = [];
+    const failing = limiter.run(async () => {
+      order.push('a');
+      await new Promise((r) => setTimeout(r, 10));
+      throw new Error('falhou');
+    });
+    const next = limiter.run(async () => {
+      order.push('b');
+      return 'b-ok';
+    });
+    await expect(failing).rejects.toThrow('falhou');
+    await expect(next).resolves.toBe('b-ok');
+    expect(order).toEqual(['a', 'b']);
+  });
+});

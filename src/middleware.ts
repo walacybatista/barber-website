@@ -50,7 +50,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
     });
   }
   if (isAdminPath(pathname) && pathname !== LOGIN_PATH && !context.locals.admin) {
-    return context.redirect(LOGIN_PATH);
+    const res = context.redirect(LOGIN_PATH);
+    res.headers.set('Cache-Control', 'no-store');
+    res.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    return res;
   }
   return next();
 });

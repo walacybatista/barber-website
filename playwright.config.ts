@@ -7,7 +7,9 @@ try {
   if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
 }
 
-const PORT = 4322;
+// E2E_PORT permite rodar a suíte em outra porta quando a 4322 estiver ocupada.
+const PORT = Number(process.env.E2E_PORT ?? 4322);
+process.env.E2E_PORT = String(PORT); // repassa aos workers (tests/e2e/helpers.ts)
 const baseURL = `http://localhost:${PORT}`;
 
 export default defineConfig({
@@ -24,13 +26,17 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: `npm run build && npx astro preview --port ${PORT}`,
+    // Servidor standalone de produção (adaptador Node), não `astro preview`: testa o artefato real
+    // e não esbarra no limite de uma instância de preview por projeto.
+    command: 'npm run build && node dist/server/entry.mjs',
     url: baseURL,
     reuseExistingServer: false,
     timeout: 180_000,
     env: {
       DATABASE_URL: process.env.E2E_DATABASE_URL ?? '',
       SITE_URL: baseURL,
+      HOST: 'localhost',
+      PORT: String(PORT),
     },
   },
 });

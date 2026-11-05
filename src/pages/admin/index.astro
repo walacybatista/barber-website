@@ -1,0 +1,335 @@
+---
+/** Agenda do painel (somente leitura): dia ou semana, filtro por barbeiro. Sem JavaScript. */
+import AdminLayout from '@/layouts/AdminLayout.astro';
+import Alert from '@/components/form/Alert.astro';
+import Container from '@/components/Container.astro';
+import { requireAdmin } from './_guard';
+import { getDb } from '@/db/client';
+import { listAgenda, listCatalog } from '@/lib/booking/repository';
+import { addDays, formatDateLong, formatTime } from '@/lib/agendar';
+import { isValidLocalDate, localToUtc, utcToLocalDate, weekdayOf } from '@/lib/time/tz';
+
+export const prerender = false;
+
+const guard = requireAdmin(Astro);
+if (guard.response) return guard.response;
+const { admin } = guard;
+
+const today = utcToLocalDate(new Date());
+const dataParam = Astro.url.searchParams.get('data');
+const validDate =
+  !!dataParam &&
+  isValidLocalDate(dataParam) &&
+  dataParam >= '2000-01-01' &&
+  dataParam <= '2100-12-31';
+const date = validDate ? dataParam : today;
+const week = Astro.url.searchParams.get('visao') === 'semana';
+const barberParam = Astro.url.searchParams.get('barbeiro') ?? '';
+
+// Semana começa na segunda-feira.
+const firstDay = week ? addDays(date, -((weekdayOf(date) + 6) % 7)) : date;
+const days = Array.from({ length: week ? 7 : 1 }, (_, i) => addDays(firstDay, i));
+const step = week ? 7 : 1;
+
+type Catalog = Awaited<ReturnType<typeof listCatalog>>;
+type Agenda = Awaited<ReturnType<typeof listAgenda>>;
+let barbers: Catalog['barbers'] = [];
+let agenda: Agenda = { bookings: [], blocks: [] };
+let failed = false;
+let barber: Catalog['barbers'][number] | undefined;
+try {
+  const db = getDb();
+  barbers = (await listCatalog(db)).barbers;
+  barber = barbers.find((b) => b.slug === barberParam);
+  agenda = await listAgenda(db, {
+    barberId: barber?.id ?? null,
+    from: localToUtc(days[0], '00:00'),
+    to: localToUtc(addDays(days[days.length - 1], 1), '00:00'),
+  });
+} catch (err) {
+  console.error('[admin] falha ao carregar agenda', err instanceof Error ? err.message : err);
+  failed = true;
+  Astro.response.status = 503;
+}
+const barberInvalid = !!barberParam && !barber && !failed;
+
+const STATUS: Record<string, { label: string; dot: string }> = {
+  confirmed: { label: 'Confirmado', dot: 'bg-focus' },
+  completed: { label: 'Concluído', dot: 'bg-success' },
+  cancelled: { label: 'Cancelado', dot: 'bg-error' },
+  no_show: { label: 'Não compareceu', dot: 'bg-warning' },
+};
+
+type Row = {
+  key: string;
+  start: Date;
+  end: Date;
+  day: string;
+  barberId: number;
+  barberName: string;
+  kind: 'booking' | 'block';
+  title: string;
+  customer?: string;
+  phone?: string;
+  status?: string;
+};
+const nameOf = (id: number) => barbers.find((b) => b.id === id)?.name ?? `Barbeiro ${id}`;
+const rows: Row[] = [
+  ...agenda.bookings.map((b): Row => ({
+    key: `b${b.id}`,
+    start: b.startAt,
+    end: b.endAt,
+    day: utcToLocalDate(b.startAt),
+    barberId: b.barberId,
+    barberName: b.barberName,
+    kind: 'booking',
+    title: b.serviceName,
+    customer: b.customerName,
+    phone: b.customerPhone,
+    status: b.status,
+  })),
+  ...agenda.blocks.map((b): Row => ({
+    key: `t${b.id}`,
+    start: b.startAt,
+    end: b.endAt,
+    day: utcToLocalDate(b.startAt),
+    barberId: b.barberId,
+    barberName: nameOf(b.barberId),
+    kind: 'block',
+    title: b.reason || 'Sem motivo informado',
+  })),
+].sort((a, b) => a.start.getTime() - b.start.getTime());
+
+// Dia: agrupa por barbeiro. Semana: agrupa por dia.
+type Group = { id: string; heading: string; rows: Row[] };
+const groups: Group[] = week
+  ? days
+      .map((d) => ({
+        id: `dia-${d}`,
+        heading: formatDateLong(d),
+        rows: rows.filter((r) => r.day === d),
+      }))
+      .filter((g) => g.rows.length > 0)
+  : [...new Set(rows.map((r) => r.barberId))]
+      .map((id) => {
+        const groupRows = rows.filter((r) => r.barberId === id);
+        return { id: `barbeiro-${id}`, heading: groupRows[0].barberName, rows: groupRows };
+      })
+      .sort((a, b) => a.heading.localeCompare(b.heading, 'pt-BR') || a.id.localeCompare(b.id));
+
+function href(d: string, semana = week) {
+  const q = new URLSearchParams();
+  if (d !== today) q.set('data', d);
+  if (semana) q.set('visao', 'semana');
+  if (barber) q.set('barbeiro', barber.slug);
+  const s = q.toString();
+  return `/admin${s ? `?${s}` : ''}`;
+}
+const title = week
+  ? `${formatDateLong(days[0])} a ${formatDateLong(days[6])}`
+  : formatDateLong(date, true);
+const phoneLabel = (p: string) =>
+  p.length === 11
+    ? `(${p.slice(0, 2)}) ${p.slice(2, 7)}-${p.slice(7)}`
+    : p.length === 10
+      ? `(${p.slice(0, 2)}) ${p.slice(2, 6)}-${p.slice(6)}`
+      : p;
+const linkCls =
+  'border-border-strong hover:bg-surface-2 inline-flex min-h-11 items-center justify-center rounded-md border px-4 font-semibold';
+// Mobile: a tabela vira cards (display:block); papéis ARIA explícitos mantêm a semântica de tabela
+// e cada célula mostra o rótulo visível (md:hidden; leitores usam os cabeçalhos sr-only).
+const cell = 'px-3 py-3 max-md:flex max-md:gap-2 max-md:px-0 max-md:py-1';
+const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
+---
+
+<AdminLayout title="Agenda · Painel" username={admin.username}>
+  <Container class="py-6">
+    <h1 class="text-h2 font-display mb-4 font-bold">Agenda</h1>
+
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+      <nav aria-label="Visão" class="flex gap-2">
+        <a
+          href={href(date, false)}
+          class:list={[linkCls, !week && 'bg-surface-2']}
+          aria-current={!week ? 'page' : undefined}
+        >
+          Dia
+        </a>
+        <a
+          href={href(date, true)}
+          class:list={[linkCls, week && 'bg-surface-2']}
+          aria-current={week ? 'page' : undefined}
+        >
+          Semana
+        </a>
+      </nav>
+      <nav aria-label="Navegar no calendário" class="flex flex-wrap items-center gap-2">
+        <a href={href(addDays(date, -step))} class={linkCls} rel="nofollow">
+          Anterior
+        </a>
+        <a href={href(today)} class={linkCls}>
+          Hoje
+        </a>
+        <a href={href(addDays(date, step))} class={linkCls} rel="nofollow">
+          Próximo
+        </a>
+      </nav>
+      <form method="get" action="/admin" class="flex items-center gap-2">
+        {date !== today && <input type="hidden" name="data" value={date} />}
+        {week && <input type="hidden" name="visao" value="semana" />}
+        <label for="barbeiro" class="font-medium">
+          Barbeiro
+        </label>
+        <select
+          id="barbeiro"
+          name="barbeiro"
+          class="bg-surface text-text border-border-strong min-h-11 rounded-md border px-3"
+        >
+          <option value="">Todos</option>
+          {barbers.map((b) => (
+            <option value={b.slug} selected={b.id === barber?.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          class="bg-primary text-on-primary hover:bg-primary-hover min-h-11 cursor-pointer rounded-md px-4 font-semibold"
+        >
+          Filtrar
+        </button>
+      </form>
+    </div>
+
+    <h2 id="periodo" class="text-h3 mb-4 font-semibold capitalize">
+      {title}
+    </h2>
+
+    {dataParam && !validDate && (
+      <Alert variant="warning" title="Data inválida" class="mb-4">
+        Mostrando hoje.
+      </Alert>
+    )}
+    {barberInvalid && (
+      <Alert variant="warning" title="Barbeiro não encontrado" class="mb-4">
+        Mostrando todos os barbeiros.
+      </Alert>
+    )}
+
+    {failed ? (
+      <Alert variant="error" title="Não foi possível carregar a agenda">
+        Tente de novo em instantes.
+      </Alert>
+    ) : groups.length === 0 ? (
+      <p role="status" class="bg-surface border-border-subtle rounded-lg border p-6 text-center">
+        {week ? 'Sem agendamentos nesta semana.' : 'Sem agendamentos neste dia.'}
+      </p>
+    ) : (
+      <div class="grid gap-8">
+        {groups.map((g) => (
+          <section aria-labelledby={g.id}>
+            <h3 id={g.id} class="mb-3 text-xl font-semibold capitalize">
+              {g.heading}
+            </h3>
+            <table role="table" class="w-full border-collapse text-left max-md:block">
+              <caption class="sr-only">Agenda de {g.heading}</caption>
+              <thead role="rowgroup" class="max-md:sr-only">
+                <tr role="row" class="border-border-strong border-b">
+                  <th role="columnheader" scope="col" class="px-3 py-2">
+                    Horário
+                  </th>
+                  {week && (
+                    <th role="columnheader" scope="col" class="px-3 py-2">
+                      Barbeiro
+                    </th>
+                  )}
+                  <th role="columnheader" scope="col" class="px-3 py-2">
+                    Serviço
+                  </th>
+                  <th role="columnheader" scope="col" class="px-3 py-2">
+                    Cliente
+                  </th>
+                  <th role="columnheader" scope="col" class="px-3 py-2">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody role="rowgroup" class="max-md:block max-md:space-y-3">
+                {g.rows.map((r) => (
+                  <tr
+                    role="row"
+                    class:list={[
+                      'border-border-subtle border-b max-md:bg-surface max-md:block max-md:rounded-lg max-md:border max-md:p-3',
+                      r.kind === 'block' && 'bg-surface-2',
+                      r.status === 'cancelled' && 'text-text-muted',
+                    ]}
+                  >
+                    <td role="cell" class={`${cell} font-semibold whitespace-nowrap`}>
+                      <span aria-hidden="true" class={lbl}>
+                        Horário
+                      </span>
+                      <span>
+                        {formatTime(r.start)} - {formatTime(r.end)}
+                      </span>
+                    </td>
+                    {week && (
+                      <td role="cell" class={cell}>
+                        <span aria-hidden="true" class={lbl}>
+                          Barbeiro
+                        </span>
+                        <span>{r.barberName}</span>
+                      </td>
+                    )}
+                    <td role="cell" class={cell}>
+                      <span aria-hidden="true" class={lbl}>
+                        Serviço
+                      </span>
+                      <span>
+                        {r.kind === 'block' ? (
+                          <>
+                            <strong>Bloqueio</strong> · {r.title}
+                          </>
+                        ) : (
+                          r.title
+                        )}
+                      </span>
+                    </td>
+                    <td role="cell" class={cell}>
+                      <span aria-hidden="true" class={lbl}>
+                        Cliente
+                      </span>
+                      {r.kind === 'booking' ? (
+                        <span>
+                          {r.customer}
+                          <span class="text-text-muted block text-sm">{phoneLabel(r.phone!)}</span>
+                        </span>
+                      ) : (
+                        <span class="text-text-muted">—</span>
+                      )}
+                    </td>
+                    <td role="cell" class={cell}>
+                      <span aria-hidden="true" class={lbl}>
+                        Status
+                      </span>
+                      {r.kind === 'booking' ? (
+                        <span class="inline-flex items-center gap-2">
+                          <span
+                            aria-hidden="true"
+                            class={`h-2.5 w-2.5 rounded-full ${STATUS[r.status!]?.dot ?? 'bg-disabled'}`}
+                          />
+                          {STATUS[r.status!]?.label ?? r.status}
+                        </span>
+                      ) : (
+                        <span>Bloqueado</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
+      </div>
+    )}
+  </Container>
+</AdminLayout>

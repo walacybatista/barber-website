@@ -1,0 +1,82 @@
+---
+/** Login do painel: POST (accept: 'form') para a Action `login`; funciona sem JavaScript. */
+import { actions } from 'astro:actions';
+import AdminLayout from '@/layouts/AdminLayout.astro';
+import Alert from '@/components/form/Alert.astro';
+import Input from '@/components/form/Input.astro';
+import Button from '@/components/Button.astro';
+import { noStoreRedirect } from './_guard';
+
+export const prerender = false;
+
+// Logout postado para esta rota: sessão encerrada, volta ao formulário (GET limpo).
+const logout = Astro.getActionResult(actions.logout);
+if (logout && !logout.error) return noStoreRedirect(Astro, '/admin/login');
+
+const result = Astro.getActionResult(actions.login);
+if (result && !result.error) return noStoreRedirect(Astro, '/admin');
+if (!result && !logout && Astro.locals.admin) return noStoreRedirect(Astro, '/admin');
+
+let alert: { variant: 'error' | 'warning'; title: string; text: string } | undefined;
+if (logout?.error) {
+  // Falha ao sair: a sessão pode continuar ativa; avisa em vez de redirecionar em silêncio.
+  Astro.response.status = 500;
+  alert = {
+    variant: 'error',
+    title: 'Não foi possível sair',
+    text: 'Tente de novo. Se o erro persistir, feche o navegador.',
+  };
+} else if (result?.error) {
+  const code = result.error.code;
+  if (code === 'TOO_MANY_REQUESTS') {
+    Astro.response.status = 429;
+    alert = {
+      variant: 'warning',
+      title: 'Muitas tentativas',
+      text: 'Aguarde alguns minutos e tente de novo.',
+    };
+  } else if (code === 'SERVICE_UNAVAILABLE' || code === 'INTERNAL_SERVER_ERROR') {
+    Astro.response.status = code === 'SERVICE_UNAVAILABLE' ? 503 : 500;
+    alert = {
+      variant: 'error',
+      title: 'Serviço indisponível',
+      text: 'Não foi possível entrar agora. Tente novamente em instantes.',
+    };
+  } else {
+    // Credenciais erradas, campos vazios ou qualquer 4xx: mensagem sempre genérica.
+    Astro.response.status = 401;
+    alert = { variant: 'error', title: 'Usuário ou senha inválidos', text: '' };
+  }
+}
+---
+
+<AdminLayout title="Entrar · Painel">
+  <div class="mx-auto w-full max-w-[25rem] px-4 py-10">
+    <h1 class="text-h1 font-display mb-6 font-bold">Entrar</h1>
+    {alert && (
+      <Alert variant={alert.variant} title={alert.title} class="mb-6">
+        {alert.text}
+      </Alert>
+    )}
+    <form method="POST" action={actions.login} class="grid gap-5">
+      <Input id="usuario" name="username" label="Usuário" autocomplete="username" maxlength={60} />
+      <div>
+        <label for="senha" class="mb-1 block font-medium">
+          Senha
+        </label>
+        <input
+          id="senha"
+          name="password"
+          type="password"
+          required
+          maxlength="200"
+          autocomplete="current-password"
+          class="bg-surface text-text border-border-strong hover:border-text-muted focus:border-focus focus:outline-focus min-h-12 w-full rounded-md border px-3 focus:outline-[3px] focus:outline-offset-0"
+        />
+      </div>
+      <Button type="submit" class="w-full">
+        Entrar
+      </Button>
+    </form>
+  </div>
+</AdminLayout>

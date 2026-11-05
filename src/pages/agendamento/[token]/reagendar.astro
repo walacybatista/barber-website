@@ -1,0 +1,255 @@
+---
+/**
+ * Reagendamento sem JavaScript (ADR-008/010): mesmo serviço e barbeiro, nova data/hora.
+ * Estado na query (?data=YYYY-MM-DD); horários listados no servidor; POST para a Action
+ * rescheduleBooking (accept: 'form'). Sucesso: 303 para /agendamento/<token>?reagendado=1.
+ */
+import { actions, isInputError } from 'astro:actions';
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import Button from '@/components/Button.astro';
+import Container from '@/components/Container.astro';
+import Alert from '@/components/form/Alert.astro';
+import DateStrip from '@/components/form/DateStrip.astro';
+import TimeSlotGrid from '@/components/form/TimeSlotGrid.astro';
+import { getDb } from '@/db/client';
+import {
+  getBookingByToken,
+  getRescheduleAvailability,
+  listCatalog,
+  type AvailableSlot,
+} from '@/lib/booking/repository';
+import {
+  buildDateStrip,
+  formatDateLong,
+  formatDateTimeLong,
+  groupSlots,
+  isDateInWindow,
+} from '@/lib/agendar';
+import { isValidLocalDate, weekdayOf } from '@/lib/time/tz';
+import { whatsappHref } from '@/lib/whatsapp';
+
+export const prerender = false;
+
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+const token = Astro.params.token ?? '';
+const pagePath = `/agendamento/${encodeURIComponent(token)}`;
+const now = new Date();
+
+// ---- Sucesso da Action: PRG para a página do agendamento ----
+const result = Astro.getActionResult(actions.rescheduleBooking);
+if (result && !result.error) {
+  const res = Astro.redirect(`${pagePath}?reagendado=1`, 303);
+  res.headers.set('Cache-Control', 'no-store');
+  res.headers.set('Referrer-Policy', 'no-referrer');
+  res.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return res;
+}
+
+// ---- Data: sempre da query (a URL da Action carrega &data=); o corpo do POST nunca é lido ----
+let dateParam: string | null = Astro.url.searchParams.get('data');
+dateParam = dateParam?.slice(0, 20) ?? null;
+
+let booking = null;
+let catalog: Awaited<ReturnType<typeof listCatalog>> | undefined;
+let failed = false;
+if (/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
+  try {
+    booking = await getBookingByToken(getDb(), token);
+    if (booking?.canManage) catalog = await listCatalog(getDb());
+  } catch (err) {
+    console.error('[reagendar] falha ao carregar', err);
+    failed = true;
+  }
+}
+const canReschedule = Boolean(booking?.canManage && catalog);
+
+const notices: string[] = [];
+let alert: { variant: 'error' | 'warning'; title: string; text: string } | undefined;
+let status = failed ? 503 : booking ? 200 : 404;
+const err = result?.error;
+if (err) {
+  if (err.code === 'CONFLICT' && booking?.status === 'confirmed') {
+    status = 409;
+    alert = {
+      variant: 'error',
+      title: 'Esse horário acabou de ser reservado',
+      text: 'Alguém foi mais rápido. Escolha outro horário abaixo.',
+    };
+  } else if (err.code === 'CONFLICT') {
+    status = 409;
+  } else if (err.code === 'FORBIDDEN') {
+    status = 403;
+  } else if (isInputError(err) || err.code === 'BAD_REQUEST') {
+    status = 400;
+    alert = {
+      variant: 'warning',
+      title: 'Escolha um horário',
+      text: 'Não conseguimos usar o horário enviado. Escolha novamente.',
+    };
+  } else if (err.code === 'NOT_FOUND') {
+    status = 404;
+  } else {
+    status = err.code === 'INTERNAL_SERVER_ERROR' ? 500 : 503;
+    alert = {
+      variant: 'error',
+      title: 'Algo deu errado',
+      text: 'Não conseguimos reagendar agora. Tente de novo em instantes.',
+    };
+  }
+}
+Astro.response.status = status;
+
+const openWeekdays = new Set((catalog?.openingHours ?? []).map((h) => h.weekday));
+let date: string | undefined;
+if (canReschedule && dateParam) {
+  if (!isValidLocalDate(dateParam)) {
+    notices.push('Data inválida. Escolha uma data da lista.');
+  } else if (!isDateInWindow(dateParam, now)) {
+    notices.push(
+      'Essa data está fora do período de agendamento (hoje até 30 dias). Escolha outra.',
+    );
+  } else if (!openWeekdays.has(weekdayOf(dateParam))) {
+    notices.push('Não abrimos nesse dia. Escolha outra data.');
+  } else {
+    date = dateParam;
+  }
+}
+
+let slots: AvailableSlot[] = [];
+let slotsError = false;
+if (canReschedule && booking && date) {
+  try {
+    slots = await getRescheduleAvailability(getDb(), { token, date, now });
+  } catch (e) {
+    console.error('[reagendar] falha ao listar horários', e);
+    slotsError = true;
+  }
+}
+const groups = groupSlots(slots.map((s) => s.start));
+const strip = canReschedule ? buildDateStrip(now, openWeekdays) : [];
+const dayHref = (d: string) => `${pagePath}/reagendar?data=${d}#horarios`;
+---
+
+<BaseLayout title="Reagendar — Cobre Velho" noindex minimal>
+  <Container class="max-w-[48rem] py-8 lg:py-12">
+    <h1 class="text-h1 mb-6 font-bold">Reagendar horário</h1>
+
+    {failed ? (
+      <Alert variant="error" title="Não foi possível carregar" data-autofocus>
+        <p>Tente de novo em instantes.</p>
+      </Alert>
+    ) : !booking ? (
+      <section aria-labelledby="titulo-vazio">
+        <h2 id="titulo-vazio" class="text-h2 font-semibold">
+          Agendamento não encontrado
+        </h2>
+        <p class="text-text-muted mt-3">Confira se o link está completo.</p>
+        <Button href="/agendar" class="mt-6">
+          Agendar horário
+        </Button>
+      </section>
+    ) : booking.status !== 'confirmed' ? (
+      <Alert variant="warning" title="Este agendamento não pode ser reagendado">
+        <p>Ele não está mais confirmado.</p>
+        <Button href={pagePath} variant="secondary" class="mt-3">
+          Ver agendamento
+        </Button>
+      </Alert>
+    ) : !booking.canManage ? (
+      <Alert variant="info" title="Faltam menos de 2 horas">
+        <p>Reagendar pelo site só até 2 horas antes. Para mudar este horário, fale com a gente.</p>
+        <div class="mt-3 flex flex-wrap gap-3">
+          <Button
+            href={whatsappHref('Olá! Preciso alterar meu agendamento (projeto fictício).')}
+            external
+            variant="secondary"
+          >
+            Falar no WhatsApp
+          </Button>
+          <Button href={pagePath} variant="secondary">
+            Voltar ao agendamento
+          </Button>
+        </div>
+      </Alert>
+    ) : !catalog ? (
+      <Alert variant="error" title="Não foi possível carregar" data-autofocus>
+        <p>Tente de novo em instantes.</p>
+      </Alert>
+    ) : (
+      <>
+        {alert && (
+          <Alert variant={alert.variant} title={alert.title} class="mb-6" data-autofocus>
+            <p>{alert.text}</p>
+          </Alert>
+        )}
+        {notices.map((n) => (
+          <Alert variant="warning" title="Ajustamos sua escolha" class="mb-6">
+            <p>{n}</p>
+          </Alert>
+        ))}
+
+        <dl class="bg-surface border-border-subtle mb-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md border p-4 text-sm">
+          <dt class="text-text-muted">Serviço</dt>
+          <dd>
+            {booking.service.name} · {booking.service.durationMin} min
+          </dd>
+          <dt class="text-text-muted">Barbeiro</dt>
+          <dd>{booking.barber.name}</dd>
+          <dt class="text-text-muted">Horário atual</dt>
+          <dd>{formatDateTimeLong(booking.startAt, true)}</dd>
+        </dl>
+
+        <h2 class="text-h2 mb-4 font-semibold">Escolha o novo dia e horário</h2>
+        <DateStrip days={strip} selected={date} hrefFor={dayHref} />
+
+        <div id="horarios" class="mt-6">
+          {!date ? (
+            <p role="status" class="text-text-muted">
+              Escolha uma data acima para ver os horários livres.
+            </p>
+          ) : slotsError ? (
+            <Alert variant="error" title="Não foi possível carregar os horários">
+              <p>Tente de novo em instantes.</p>
+              <Button href={dayHref(date)} variant="secondary" class="mt-3">
+                Tentar de novo
+              </Button>
+            </Alert>
+          ) : groups.length === 0 ? (
+            <div
+              role="status"
+              class="bg-surface border-border-subtle rounded-md border p-6 text-center"
+            >
+              <h3 class="text-h3 font-semibold">Sem horários livres em {formatDateLong(date)}</h3>
+              <p class="text-text-muted mt-2">Escolha outra data na faixa acima.</p>
+            </div>
+          ) : (
+            <form
+              method="POST"
+              action={`${pagePath}/reagendar${actions.rescheduleBooking}&data=${date}`}
+            >
+              <input type="hidden" name="token" value={token} />
+              <TimeSlotGrid groups={groups} dateLabel={formatDateLong(date)} name="startAt" />
+              <Button type="submit" class="mt-6 w-full sm:w-auto">
+                Confirmar novo horário
+              </Button>
+            </form>
+          )}
+        </div>
+
+        <p class="mt-8">
+          <a class="prose-link" href={pagePath}>
+            Voltar ao agendamento
+          </a>
+        </p>
+      </>
+    )}
+  </Container>
+</BaseLayout>
+
+<script>
+  // Melhoria progressiva: leva o foco ao aviso de erro (sem JS ele continua visível no topo).
+  document.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+</script>

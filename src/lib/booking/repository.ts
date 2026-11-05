@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Db } from '../../db/client.ts';
 import {
@@ -135,6 +135,10 @@ export async function listAvailability(
     barberId?: number | null;
     now?: Date;
     timezone?: string;
+    /** Ignora o busy_period deste agendamento (reagendamento pode sobrepor o próprio horário). */
+    ignoreBookingId?: number;
+    /** Sobrepõe a duração do serviço (reagendamento usa a original); dispensa serviço ativo. */
+    durationMin?: number;
   },
 ): Promise<AvailableSlot[]> {
   const now = input.now ?? new Date();
@@ -145,7 +149,10 @@ export async function listAvailability(
   const dayStartUtc = localToUtc(input.date, '00:00', timezone);
   const dayEndUtc = localToUtc(nextLocalDate(input.date), '00:00', timezone);
   if (dayEndUtc <= earliest || dayStartUtc > latest) return [];
-  const service = await loadService(db, input.serviceId);
+  const service =
+    input.durationMin !== undefined
+      ? { durationMin: input.durationMin }
+      : await loadService(db, input.serviceId);
 
   const barberRows = await db
     .select({ id: barbers.id })
@@ -175,6 +182,9 @@ export async function listAvailability(
       and(
         inArray(busyPeriods.barberId, ids),
         sql`${busyPeriods.period} && ${rangeSql(dayStart, dayEnd)}`,
+        input.ignoreBookingId !== undefined
+          ? or(isNull(busyPeriods.bookingId), ne(busyPeriods.bookingId, input.ignoreBookingId))
+          : undefined,
       ),
     );
 
@@ -200,6 +210,32 @@ export async function listAvailability(
   return [...byStart.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([ms, barberIds]) => ({ start: new Date(ms), barberIds }));
+}
+
+/**
+ * Horários para reagendar pelo token: mesmo barbeiro, duração ORIGINAL (`endAt - startAt`),
+ * ignorando o próprio busy_period. Token desconhecido: NotFoundError. Agendamento que não está
+ * `confirmed`: lista vazia.
+ */
+export async function getRescheduleAvailability(
+  db: Executor,
+  input: { token: string; date: string; now?: Date; timezone?: string },
+): Promise<AvailableSlot[]> {
+  const [b] = await db
+    .select()
+    .from(bookings)
+    .where(eq(bookings.manageTokenHash, hashToken(input.token)));
+  if (!b) throw new NotFoundError('Agendamento');
+  if (b.status !== 'confirmed') return [];
+  return listAvailability(db, {
+    date: input.date,
+    serviceId: b.serviceId,
+    barberId: b.barberId,
+    now: input.now,
+    timezone: input.timezone,
+    ignoreBookingId: b.id,
+    durationMin: Math.round((b.endAt.getTime() - b.startAt.getTime()) / MIN),
+  });
 }
 
 // ---------- Agendamentos ----------

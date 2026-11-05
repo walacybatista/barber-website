@@ -159,7 +159,9 @@ export const server = {
     },
   }),
 
+  // accept: 'form' (ADR-010): páginas /agendamento/[token] postam FormData (token em campo hidden).
   cancelBooking: defineAction({
+    accept: 'form',
     input: z.object({ token: z.string().min(20).max(100) }),
     handler: async ({ token }) => {
       try {
@@ -171,6 +173,7 @@ export const server = {
   }),
 
   rescheduleBooking: defineAction({
+    accept: 'form',
     input: z.object({ token: z.string().min(20).max(100), startAt: isoInstant }),
     handler: async ({ token, startAt }) => {
       try {
@@ -205,8 +208,17 @@ export const server = {
   logout: defineAction({
     accept: 'form',
     handler: async (_input, context) => {
-      await deleteSession(getDb(), context.cookies.get(SESSION_COOKIE)?.value);
-      context.cookies.delete(SESSION_COOKIE, { path: '/' });
+      try {
+        await deleteSession(getDb(), context.cookies.get(SESSION_COOKIE)?.value);
+      } catch (err) {
+        console.error('logout: falha ao apagar sessão', err instanceof Error ? err.message : err);
+        throw new ActionError({
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Serviço temporariamente indisponível. Tente novamente.',
+        });
+      } finally {
+        context.cookies.delete(SESSION_COOKIE, { path: '/' });
+      }
       return { ok: true };
     },
   }),

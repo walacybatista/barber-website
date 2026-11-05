@@ -1,5 +1,10 @@
 ---
-/** Página mínima do agendamento (a gestão completa vem na próxima tarefa). Token só no caminho; nunca em query. */
+/**
+ * Página do agendamento: resumo, .ics, cancelar e reagendar (ADR-008/010). Token só no caminho; nunca em query.
+ * Cancelar: <form method="POST"> dentro de <details> (confirmação em 2 passos sem JS; sem estado extra
+ * no servidor). Sucesso da Action: PRG (303) para esta mesma página.
+ */
+import { actions, isInputError } from 'astro:actions';
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import Button from '@/components/Button.astro';
 import Container from '@/components/Container.astro';
@@ -8,6 +13,7 @@ import { getDb } from '@/db/client';
 import { getBookingByToken } from '@/lib/booking/repository';
 import { formatDateTimeLong } from '@/lib/agendar';
 import { formatBRL } from '@/lib/format';
+import { whatsappHref } from '@/lib/whatsapp';
 
 export const prerender = false;
 
@@ -17,6 +23,47 @@ Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 
 const token = Astro.params.token ?? '';
 const isNew = Astro.url.searchParams.get('novo') === '1';
+const wasRescheduled = Astro.url.searchParams.get('reagendado') === '1';
+const pagePath = `/agendamento/${encodeURIComponent(token)}`;
+
+// ---- Resultado do cancelamento (POST da Action) ----
+const result = Astro.getActionResult(actions.cancelBooking);
+if (result && !result.error) {
+  const res = Astro.redirect(pagePath, 303);
+  res.headers.set('Cache-Control', 'no-store');
+  res.headers.set('Referrer-Policy', 'no-referrer');
+  res.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return res;
+}
+let actionAlert: { title: string; text: string } | undefined;
+let actionStatus = 0;
+if (result?.error) {
+  const e = result.error;
+  if (isInputError(e) || e.code === 'BAD_REQUEST') {
+    actionStatus = 400;
+    actionAlert = { title: 'Não foi possível cancelar', text: 'Tente de novo.' };
+  } else if (e.code === 'FORBIDDEN') {
+    actionStatus = 403;
+    actionAlert = {
+      title: 'Já não dá para cancelar pelo site',
+      text: 'Cancelamento só até 2 horas antes do horário.',
+    };
+  } else if (e.code === 'CONFLICT') {
+    actionStatus = 409;
+    actionAlert = {
+      title: 'Este agendamento não pode mais ser cancelado',
+      text: 'Ele já foi cancelado ou concluído.',
+    };
+  } else if (e.code === 'NOT_FOUND') {
+    actionStatus = 404;
+  } else {
+    actionStatus = e.code === 'INTERNAL_SERVER_ERROR' ? 500 : 503;
+    actionAlert = {
+      title: 'Algo deu errado',
+      text: 'Não conseguimos cancelar agora. Tente de novo em instantes.',
+    };
+  }
+}
 
 let booking = null;
 let failed = false;
@@ -28,7 +75,7 @@ if (/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
     failed = true;
   }
 }
-Astro.response.status = failed ? 503 : booking ? 200 : 404;
+Astro.response.status = failed ? 503 : booking ? actionStatus || 200 : 404;
 ---
 
 <BaseLayout
@@ -63,12 +110,43 @@ Astro.response.status = failed ? 503 : booking ? 200 : 404;
             <p>Esperamos você, {booking.customerFirstName}.</p>
           </Alert>
         )}
+        {wasRescheduled && booking.status === 'confirmed' && (
+          <Alert variant="success" title="Agendamento reagendado" class="mb-6">
+            <p>Seu novo horário está abaixo.</p>
+          </Alert>
+        )}
+        {actionAlert && (
+          <Alert variant="error" title={actionAlert.title} class="mb-6" data-autofocus>
+            <p>{actionAlert.text}</p>
+          </Alert>
+        )}
         <h1 id="titulo" class="text-h1 font-bold">
           Seu agendamento
         </h1>
 
         {booking.status === 'cancelled' && (
-          <Alert variant="warning" title="Este agendamento foi cancelado" class="mt-4" />
+          <Alert variant="warning" title="Agendamento cancelado" class="mt-4">
+            <p>Este horário foi liberado. Quer marcar outro?</p>
+            <Button href="/agendar" variant="secondary" class="mt-3">
+              Agendar novo horário
+            </Button>
+          </Alert>
+        )}
+        {booking.status === 'completed' && (
+          <Alert variant="success" title="Atendimento concluído" class="mt-4">
+            <p>Obrigado pela visita! Quando quiser, é só agendar de novo.</p>
+            <Button href="/agendar" variant="secondary" class="mt-3">
+              Agendar novo horário
+            </Button>
+          </Alert>
+        )}
+        {booking.status === 'no_show' && (
+          <Alert variant="warning" title="Não registramos sua presença" class="mt-4">
+            <p>Este horário passou sem comparecimento. Você pode agendar outro.</p>
+            <Button href="/agendar" variant="secondary" class="mt-3">
+              Agendar novo horário
+            </Button>
+          </Alert>
         )}
 
         <dl class="bg-surface border-border-subtle mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-md border p-5">
@@ -93,11 +171,57 @@ Astro.response.status = failed ? 503 : booking ? 200 : 404;
         </Alert>
 
         {booking.status === 'confirmed' && (
-          <Button href={`/agendamento/${encodeURIComponent(token)}.ics`} class="mt-6" download>
+          <Button href={`${pagePath}.ics`} class="mt-6" download>
             Adicionar à agenda (.ics)
           </Button>
+        )}
+
+        {booking.status === 'confirmed' && booking.canManage && (
+          <div class="mt-8 space-y-4">
+            <h2 class="text-h2 font-semibold">Mudou de planos?</h2>
+            <Button href={`${pagePath}/reagendar`} variant="secondary">
+              Reagendar
+            </Button>
+            <details class="bg-surface border-border-subtle rounded-md border p-4">
+              <summary class="focus-visible:outline-focus min-h-11 cursor-pointer font-semibold focus-visible:outline-[3px] focus-visible:outline-offset-2">
+                Cancelar agendamento
+              </summary>
+              <form method="POST" action={`${pagePath}${actions.cancelBooking}`} class="mt-3">
+                <input type="hidden" name="token" value={token} />
+                <p class="font-semibold">Tem certeza que quer cancelar?</p>
+                <p class="text-text-muted mt-1">O horário será liberado para outras pessoas.</p>
+                <Button type="submit" class="mt-4">
+                  Sim, cancelar agendamento
+                </Button>
+              </form>
+            </details>
+            <p class="text-text-muted text-sm">
+              Cancelar e reagendar são possíveis até 2 horas antes do horário.
+            </p>
+          </div>
+        )}
+        {booking.status === 'confirmed' && !booking.canManage && (
+          <Alert variant="info" title="Faltam menos de 2 horas" class="mt-8">
+            <p>
+              Cancelar e reagendar pelo site só até 2 horas antes. Para mudar este horário, fale com
+              a gente.
+            </p>
+            <Button
+              href={whatsappHref('Olá! Preciso alterar meu agendamento (projeto fictício).')}
+              external
+              variant="secondary"
+              class="mt-3"
+            >
+              Falar no WhatsApp
+            </Button>
+          </Alert>
         )}
       </section>
     )}
   </Container>
 </BaseLayout>
+
+<script>
+  // Melhoria progressiva: leva o foco ao aviso de erro (sem JS ele continua visível no topo).
+  document.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+</script>

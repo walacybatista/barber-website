@@ -15,6 +15,7 @@ import {
   createTimeBlock,
   deleteTimeBlock,
   getBookingByToken,
+  getRescheduleAvailability,
   listAgenda,
   listAvailability,
   markBookingStatus,
@@ -227,6 +228,29 @@ describe('disponibilidade, agenda e status', () => {
     expect(only1.some((s) => s.start.getTime() === at('10:00').getTime())).toBe(false);
     expect(only1.some((s) => s.start.getTime() === at('09:30').getTime())).toBe(true);
     expect(only1[0].start.toISOString()).toBe(at('09:00').toISOString());
+  });
+
+  it('reagendamento: ignoreBookingId libera sobreposição ao próprio horário', async () => {
+    const { booking, token } = await book({ serviceId: ctx.svc60.id, time: '10:00' });
+    const has = (slots: { start: Date }[], t: string) =>
+      slots.some((s) => s.start.getTime() === at(t).getTime());
+    const base = { date: DAY, serviceId: ctx.svc60.id, barberId: ctx.b1.id, now: NOW };
+    const without = await listAvailability(db, base);
+    expect(has(without, '10:15')).toBe(false);
+    expect(has(without, '10:30')).toBe(false);
+    const withIgnore = await listAvailability(db, { ...base, ignoreBookingId: booking.id });
+    expect(has(withIgnore, '10:15')).toBe(true);
+    expect(has(withIgnore, '10:30')).toBe(true);
+    const viaToken = await getRescheduleAvailability(db, { token, date: DAY, now: NOW });
+    expect(has(viaToken, '10:15')).toBe(true);
+    expect(has(viaToken, '10:00')).toBe(true);
+    // Serviço desativado: reagendar ainda funciona (duração original, sem exigir serviço ativo).
+    await db.execute(dsql`UPDATE services SET active = false WHERE id = ${ctx.svc60.id}`);
+    const inactive = await getRescheduleAvailability(db, { token, date: DAY, now: NOW });
+    expect(has(inactive, '10:15')).toBe(true);
+    // 17:15 + 60 min passa do fechamento (18:00): duração de 60 min respeitada.
+    expect(has(inactive, '17:15')).toBe(false);
+    expect(has(inactive, '17:00')).toBe(true);
   });
 
   it('markBookingStatus e listAgenda', async () => {
