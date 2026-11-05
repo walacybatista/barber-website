@@ -1,0 +1,122 @@
+---
+import { business } from '@/data/business';
+import Button from './Button.astro';
+import Container from './Container.astro';
+import Icon from './Icon.astro';
+
+const links = [
+  { href: '/#sobre', label: 'Sobre' },
+  { href: '/#servicos', label: 'Serviços' },
+  { href: '/#barbeiros', label: 'Barbeiros' },
+  { href: '/#galeria', label: 'Galeria' },
+  { href: '/#horarios', label: 'Horários' },
+  { href: '/#contato', label: 'Contato' },
+];
+---
+
+<header class="bg-surface border-border-subtle z-40 border-b" data-header>
+  <Container class="flex min-h-16 flex-wrap items-center justify-between gap-x-3">
+    <a href="/" class="font-display text-xl font-bold tracking-tight">
+      {business.shortName}
+    </a>
+
+    <div class="flex items-center gap-2 md:gap-6">
+      <nav aria-label="Principal" class="order-last basis-full md:order-none md:basis-auto">
+        <ul
+          id="menu-principal"
+          data-menu-panel
+          class="flex flex-col py-2 md:flex-row md:items-center md:gap-1 md:py-0"
+        >
+          {links.map((l) => (
+            <li>
+              <a
+                href={l.href}
+                class="hover:text-primary flex min-h-12 items-center px-1 text-lg md:min-h-11 md:px-3 md:text-base"
+              >
+                {l.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <Button href="/agendar" class="min-h-11 px-4 md:px-5">
+        Agendar
+      </Button>
+      <button
+        type="button"
+        data-menu-button
+        aria-expanded="false"
+        aria-controls="menu-principal"
+        aria-label="Menu"
+        class="border-border-strong hover:bg-surface-2 h-11 w-11 items-center justify-center rounded-md border"
+      >
+        <span data-icon-open>
+          <Icon name="menu" />
+        </span>
+        <span data-icon-close hidden>
+          <Icon name="close" />
+        </span>
+      </button>
+    </div>
+  </Container>
+</header>
+
+<script>
+  const header = document.querySelector<HTMLElement>('[data-header]');
+  const button = header?.querySelector<HTMLButtonElement>('[data-menu-button]');
+  const panel = header?.querySelector<HTMLElement>('[data-menu-panel]');
+
+  if (header && button && panel) {
+    const desktop = window.matchMedia('(min-width: 48rem)');
+    const iconOpen = button.querySelector<HTMLElement>('[data-icon-open]');
+    const iconClose = button.querySelector<HTMLElement>('[data-icon-close]');
+    const isOpen = () => panel.hasAttribute('data-open');
+    const outside = () =>
+      document.querySelectorAll<HTMLElement>('main, footer, [data-inert-on-menu]');
+
+    const focusables = () =>
+      Array.from(header.querySelectorAll<HTMLElement>('a[href], button')).filter(
+        (el) => el.offsetParent !== null,
+      );
+
+    function setOpen(open: boolean, returnFocus = false) {
+      if (open === isOpen()) return;
+      panel!.toggleAttribute('data-open', open);
+      button!.setAttribute('aria-expanded', String(open));
+      if (iconOpen) iconOpen.hidden = open;
+      if (iconClose) iconClose.hidden = !open;
+      document.body.style.overflow = open ? 'hidden' : '';
+      outside().forEach((el) => el.toggleAttribute('inert', open));
+      if (open) panel!.querySelector<HTMLElement>('a')?.focus();
+      else if (returnFocus) button!.focus();
+    }
+
+    button.addEventListener('click', () => setOpen(!isOpen()));
+    panel.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('a')) setOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!isOpen()) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false, true);
+      } else if (e.key === 'Tab') {
+        const items = focusables();
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    });
+    desktop.addEventListener('change', (e) => {
+      if (e.matches) setOpen(false);
+    });
+    // Só agora o CSS recolhe o menu no mobile; se algo acima falhar, a navegação segue visível.
+    header.setAttribute('data-menu-ready', '');
+  }
+</script>

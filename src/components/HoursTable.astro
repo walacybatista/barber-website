@@ -1,0 +1,31 @@
+---
+import type { OpeningHours } from '@/data/business';
+import { groupHours } from '@/lib/hours';
+
+interface Props {
+  hours: OpeningHours[];
+}
+const rows = groupHours(Astro.props.hours);
+---
+
+<table class="border-border-subtle w-full border-collapse overflow-hidden rounded-md">
+  <caption class="sr-only">Horário de funcionamento (fictício)</caption>
+  <thead class="sr-only">
+    <tr>
+      <th scope="col">Dia</th>
+      <th scope="col">Horário</th>
+    </tr>
+  </thead>
+  <tbody>
+    {rows.map((row) => (
+      <tr class="border-border-subtle border-b last:border-b-0">
+        <th scope="row" class="py-3 pr-4 text-left font-medium">
+          {row.label}
+        </th>
+        <td class={`py-3 text-right ${row.open ? '' : 'text-text-muted'}`}>
+          {row.open && row.close ? `${row.open} - ${row.close}` : 'Fechado'}
+        </td>
+      </tr>
+    ))}
+  </tbody>
+</table>

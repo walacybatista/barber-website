@@ -1,0 +1,21 @@
+# Apenas desenvolvimento local. Credenciais fictícias.
+services:
+  db:
+    image: postgres:17.11
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: barber
+      POSTGRES_PASSWORD: barber
+      POSTGRES_DB: barber
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - barber_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U barber -d barber']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  barber_pgdata:

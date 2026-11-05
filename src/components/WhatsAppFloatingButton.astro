@@ -1,0 +1,14 @@
+---
+import { whatsappHref } from '@/lib/whatsapp';
+import ExternalLink from './ExternalLink.astro';
+import Icon from './Icon.astro';
+---
+
+<ExternalLink
+  href={whatsappHref()}
+  data-inert-on-menu
+  class="bg-whatsapp text-on-primary shadow-pop fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 flex h-14 w-14 items-center justify-center rounded-full transition-transform duration-150 hover:-translate-y-0.5"
+>
+  <Icon name="whatsapp" class="h-7 w-7" />
+  <span class="sr-only">Falar no WhatsApp</span>
+</ExternalLink>

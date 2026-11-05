@@ -1,0 +1,59 @@
+---
+import type { HTMLAttributes } from 'astro/types';
+import ExternalLink from './ExternalLink.astro';
+
+type Variant = 'primary' | 'secondary' | 'ghost';
+
+interface Props extends Omit<HTMLAttributes<'a'>, 'href'> {
+  /** Com href renderiza <a> (navegação); sem href, <button> (ação). */
+  href?: string;
+  variant?: Variant;
+  /** Abre em nova aba com rel seguro e aviso para leitor de tela. */
+  external?: boolean;
+  type?: 'button' | 'submit';
+  /** Só vale para <button> (sem href); links não têm estado desabilitado (design 6.2). */
+  disabled?: boolean;
+  class?: string;
+}
+
+const {
+  href,
+  variant = 'primary',
+  external = false,
+  type = 'button',
+  disabled = false,
+  class: className = '',
+  ...rest
+} = Astro.props;
+
+const base =
+  'inline-flex min-h-11 md:min-h-12 items-center justify-center gap-2 rounded-md px-5 font-semibold ' +
+  'transition-colors duration-150 ease-out-soft cursor-pointer text-center ' +
+  'disabled:cursor-not-allowed disabled:shadow-none';
+// Estados desabilitados conforme design 6.1; hover/active só quando não desabilitado.
+const variants: Record<Variant, string> = {
+  primary:
+    'bg-primary text-on-primary not-disabled:hover:bg-primary-hover not-disabled:active:brightness-90 ' +
+    'disabled:bg-surface-2 disabled:text-disabled',
+  secondary:
+    'border border-border-strong text-text bg-transparent not-disabled:hover:bg-surface-2 not-disabled:active:bg-surface ' +
+    'disabled:border-border-subtle disabled:text-disabled',
+  ghost:
+    'text-primary not-disabled:hover:bg-surface-2 not-disabled:active:bg-surface disabled:text-disabled',
+};
+const classes = `${base} ${variants[variant]} ${className}`;
+---
+
+{href && external ? (
+  <ExternalLink href={href} class={classes} {...rest}>
+    <slot />
+  </ExternalLink>
+) : href ? (
+  <a href={href} class={classes} {...rest}>
+    <slot />
+  </a>
+) : (
+  <button type={type} class={classes} disabled={disabled} {...(rest as Record<string, unknown>)}>
+    <slot />
+  </button>
+)}

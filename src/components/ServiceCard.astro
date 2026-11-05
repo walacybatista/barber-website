@@ -1,0 +1,33 @@
+---
+import type { Service } from '@/data/business';
+import { formatBRL } from '@/lib/format';
+import Button from './Button.astro';
+import Icon from './Icon.astro';
+
+interface Props {
+  service: Service;
+}
+const { service } = Astro.props;
+---
+
+<article class="bg-surface border-border-subtle shadow-card flex h-full flex-col rounded-md border p-5">
+  <h3 class="text-h3 leading-[var(--text-h3--line-height)] font-semibold">{service.name}</h3>
+  <p class="text-text-muted mt-2 flex-1">{service.description}</p>
+  <div class="mt-4 flex items-center justify-between gap-3">
+    <p class="text-text-muted flex items-center gap-1.5 text-sm">
+      <Icon name="clock" class="h-4 w-4" />
+      <span>{service.durationMin} min</span>
+    </p>
+    <p class="font-display text-primary text-xl font-semibold">
+      <data value={(service.priceCents / 100).toFixed(2)}>{formatBRL(service.priceCents)}</data>
+    </p>
+  </div>
+  <Button
+    href={`/agendar?servico=${service.slug}`}
+    variant="secondary"
+    class="mt-4 w-full"
+    aria-label={`Agendar este serviço: ${service.name}`}
+  >
+    Agendar este serviço
+  </Button>
+</article>

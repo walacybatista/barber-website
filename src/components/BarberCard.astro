@@ -1,0 +1,42 @@
+---
+import { Image } from 'astro:assets';
+import type { Barber } from '@/data/business';
+import { getAsset } from '@/lib/images';
+import Button from './Button.astro';
+
+interface Props {
+  barber: Barber;
+}
+const { barber } = Astro.props;
+const photo = getAsset(barber.photo);
+const firstName = barber.name.split(' ')[0];
+---
+
+<article class="bg-surface border-border-subtle shadow-card overflow-hidden rounded-md border">
+  <div class="aspect-[4/5] overflow-hidden">
+    <Image
+      src={photo}
+      alt={`Retrato ilustrativo de ${barber.name}, barbeiro fictício`}
+      width={400}
+      height={500}
+      widths={[320, 480, 640]}
+      sizes="(min-width: 1024px) 360px, (min-width: 640px) 45vw, 100vw"
+      loading="lazy"
+      decoding="async"
+      class="h-full w-full object-cover"
+    />
+  </div>
+  <div class="p-5">
+    <h3 class="text-h3 leading-[var(--text-h3--line-height)] font-semibold">{barber.name}</h3>
+    <p class="text-primary mt-1 text-sm font-medium">{barber.specialties.join(' · ')}</p>
+    <p class="text-text-muted mt-2">{barber.bio}</p>
+    <Button
+      href={`/agendar?barbeiro=${barber.slug}`}
+      variant="secondary"
+      class="mt-4 w-full"
+      aria-label={`Agendar com ${barber.name}`}
+    >
+      Agendar com {firstName}
+    </Button>
+  </div>
+</article>

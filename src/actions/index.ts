@@ -1,0 +1,249 @@
+import { ActionError, defineAction, type ActionAPIContext } from 'astro:actions';
+import { z } from 'astro/zod';
+import { getDb } from '../db/client.ts';
+import { InvalidCredentialsError, login as loginService } from '../lib/auth/login.ts';
+import { RateLimitedError, consumeRateLimit } from '../lib/rate-limit.ts';
+import { createHash } from 'node:crypto';
+import {
+  SESSION_COOKIE,
+  deleteSession,
+  sessionCookieOptions,
+  validateSession,
+} from '../lib/auth/sessions.ts';
+import { DomainError } from '../lib/booking/errors.ts';
+import {
+  cancelBooking,
+  createBooking,
+  createTimeBlock,
+  deleteTimeBlock,
+  getBookingByToken,
+  listAvailability,
+  markBookingStatus,
+  rescheduleBooking,
+} from '../lib/booking/repository.ts';
+import { normalizePhone } from '../lib/booking/rules.ts';
+
+/** Fronteira HTTP fina: valida (zod), chama lib/ e traduz erros de domínio. */
+function toActionError(err: unknown): never {
+  if (err instanceof ActionError) throw err;
+  if (err instanceof RateLimitedError) {
+    throw new ActionError({ code: 'TOO_MANY_REQUESTS', message: err.message });
+  }
+  if (err instanceof InvalidCredentialsError) {
+    throw new ActionError({ code: 'UNAUTHORIZED', message: err.message });
+  }
+  if (err instanceof DomainError) {
+    const code =
+      err.code === 'TOO_MANY_BOOKINGS'
+        ? 'TOO_MANY_REQUESTS'
+        : err.code === 'SLOT_TAKEN' || err.code === 'INVALID_STATE'
+          ? 'CONFLICT'
+          : err.code === 'NOT_FOUND'
+            ? 'NOT_FOUND'
+            : err.code === 'TOO_LATE'
+              ? 'FORBIDDEN'
+              : 'BAD_REQUEST';
+    throw new ActionError({ code, message: err.message });
+  }
+  throw err;
+}
+
+/** Revalida a sessão no servidor (não confia só no middleware). */
+async function requireAdmin(context: ActionAPIContext) {
+  const sid = context.cookies.get(SESSION_COOKIE)?.value;
+  const session = await validateSession(getDb(), sid);
+  if (!session) {
+    throw new ActionError({ code: 'UNAUTHORIZED', message: 'Sessão inválida ou expirada.' });
+  }
+  return session.user;
+}
+
+/** IP do cliente; sem `clientAddress` agrupa tudo em 'unknown' (limite fica mais rígido, não mais frouxo). */
+function clientIp(context: ActionAPIContext): string {
+  try {
+    return context.clientAddress;
+  } catch {
+    return 'unknown';
+  }
+}
+
+const BOOKING_MAX_PER_IP = 10;
+
+const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const isoInstant = z.iso.datetime({ offset: true }).transform((s) => new Date(s));
+const barberIdOrNull = z.number().int().positive().nullable().optional();
+
+const phone = z
+  .string()
+  .max(30)
+  .transform((v, ctx) => {
+    const n = normalizePhone(v);
+    if (!n) ctx.issues.push({ code: 'custom', message: 'Telefone inválido.', input: v });
+    return n ?? '';
+  });
+
+const summary = (b: { id: number; startAt: Date; endAt: Date; status: string }) => ({
+  id: b.id,
+  startAt: b.startAt.toISOString(),
+  endAt: b.endAt.toISOString(),
+  status: b.status,
+});
+
+export const server = {
+  getAvailability: defineAction({
+    input: z.object({
+      date: localDate,
+      serviceId: z.number().int().positive(),
+      barberId: barberIdOrNull,
+    }),
+    handler: async (input) => {
+      try {
+        const slots = await listAvailability(getDb(), input);
+        return slots.map((s) => ({ start: s.start.toISOString(), barberIds: s.barberIds }));
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  createBooking: defineAction({
+    input: z.object({
+      serviceId: z.number().int().positive(),
+      barberId: z.number().int().positive().nullable(),
+      startAt: isoInstant,
+      customerName: z.string().trim().min(2).max(80),
+      customerPhone: phone,
+      consent: z.literal(true, { error: 'É necessário aceitar o uso dos dados.' }),
+    }),
+    handler: async (input, context) => {
+      try {
+        // Rate limit por IP (10/hora) antes de tocar no domínio; conta toda tentativa.
+        await consumeRateLimit(getDb(), [
+          {
+            key: `booking:ip:${createHash('sha256').update(clientIp(context)).digest('hex')}`,
+            max: BOOKING_MAX_PER_IP,
+            windowMs: 60 * 60 * 1000,
+          },
+        ]);
+        const { booking, token } = await createBooking(getDb(), input);
+        return { booking: summary(booking), barberId: booking.barberId, manageToken: token };
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  cancelBooking: defineAction({
+    input: z.object({ token: z.string().min(20).max(100) }),
+    handler: async ({ token }) => {
+      try {
+        return summary(await cancelBooking(getDb(), token));
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  rescheduleBooking: defineAction({
+    input: z.object({ token: z.string().min(20).max(100), startAt: isoInstant }),
+    handler: async ({ token, startAt }) => {
+      try {
+        return summary(await rescheduleBooking(getDb(), token, startAt));
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  // ---- Admin ----
+
+  login: defineAction({
+    accept: 'form',
+    input: z.object({ username: z.string().min(1).max(60), password: z.string().min(1).max(200) }),
+    handler: async (input, context) => {
+      const ip = clientIp(context);
+      try {
+        const s = await loginService(getDb(), { ...input, ip });
+        context.cookies.set(
+          SESSION_COOKIE,
+          s.sessionId,
+          sessionCookieOptions(s.expiresAt, import.meta.env.PROD),
+        );
+        return { username: s.user.username };
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  logout: defineAction({
+    accept: 'form',
+    handler: async (_input, context) => {
+      await deleteSession(getDb(), context.cookies.get(SESSION_COOKIE)?.value);
+      context.cookies.delete(SESSION_COOKIE, { path: '/' });
+      return { ok: true };
+    },
+  }),
+
+  createTimeBlock: defineAction({
+    input: z
+      .object({
+        barberId: z.number().int().positive(),
+        startAt: isoInstant,
+        endAt: isoInstant,
+        reason: z.string().trim().max(200).optional(),
+      })
+      .refine((v) => v.endAt > v.startAt, { message: 'Fim deve ser depois do início.' }),
+    handler: async (input, context) => {
+      const admin = await requireAdmin(context);
+      try {
+        const b = await createTimeBlock(getDb(), { ...input, createdBy: admin.id });
+        return { id: b.id };
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  deleteTimeBlock: defineAction({
+    input: z.object({ blockId: z.number().int().positive() }),
+    handler: async ({ blockId }, context) => {
+      await requireAdmin(context);
+      try {
+        await deleteTimeBlock(getDb(), blockId);
+        return { ok: true };
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  setBookingStatus: defineAction({
+    input: z.object({
+      bookingId: z.number().int().positive(),
+      status: z.enum(['cancelled', 'completed', 'no_show']),
+    }),
+    handler: async ({ bookingId, status }, context) => {
+      await requireAdmin(context);
+      try {
+        return summary(await markBookingStatus(getDb(), bookingId, status));
+      } catch (err) {
+        return toActionError(err);
+      }
+    },
+  }),
+
+  /** Para a página /agendamento/[token] também poderia chamar a lib direto; exposto por conveniência. */
+  getBooking: defineAction({
+    input: z.object({ token: z.string().min(20).max(100) }),
+    handler: async ({ token }) => {
+      const b = await getBookingByToken(getDb(), token);
+      if (!b) throw new ActionError({ code: 'NOT_FOUND', message: 'Agendamento não encontrado.' });
+      return {
+        ...b,
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+      };
+    },
+  }),
+};

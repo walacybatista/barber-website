@@ -1,0 +1,120 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import { business } from '@/data/business';
+
+const updated = '5 de novembro de 2026';
+---
+
+<BaseLayout
+  title={`Política de Privacidade — ${business.name}`}
+  description="Como a Cobre Velho Barbearia (fictícia) trata seus dados pessoais no agendamento, conforme a LGPD."
+>
+  <article class="mx-auto w-full max-w-[48rem] px-4 py-12 md:px-6 lg:py-16">
+    <h1 class="text-h1 leading-[var(--text-h1--line-height)] font-bold">Política de Privacidade</h1>
+    <p class="text-text-muted mt-2 text-sm">Atualizada em {updated}</p>
+
+    <div
+      class="bg-warning-bg border-warning mt-6 rounded-lg border p-4"
+      role="note"
+      aria-label="Aviso de projeto de portfólio"
+    >
+      <p>
+        <strong>Projeto de portfólio.</strong> A {business.name} é fictícia. Este texto demonstra
+        como uma política de privacidade conforme a Lei Geral de Proteção de Dados (LGPD, Lei
+        13.709/2018) seria escrita para um sistema de agendamento. Nenhum dado enviado a este site é
+        usado para fins comerciais reais.
+      </p>
+    </div>
+
+    <div class="mt-8 space-y-8 leading-relaxed [&_h2]:text-h3 [&_h2]:mb-3 [&_p]:max-w-[65ch]">
+      <section aria-labelledby="p-quem">
+        <h2 id="p-quem">1. Quem é o controlador</h2>
+        <p>
+          {business.name} (fictícia), {business.address.street}, {business.address.city}/
+          {business.address.region}. Contato do encarregado de dados (fictício):{' '}
+          <a href={`mailto:${business.privacyEmail}`} class="prose-link">
+            {business.privacyEmail}
+          </a>
+          .
+        </p>
+      </section>
+
+      <section aria-labelledby="p-dados">
+        <h2 id="p-dados">2. Quais dados coletamos</h2>
+        <p>
+          Ao agendar um horário coletamos apenas <strong>nome</strong> e <strong>telefone</strong>.
+          Também registramos o serviço, o barbeiro e o horário escolhidos, necessários para o
+          atendimento. Não coletamos dados sensíveis nem cadastramos conta de cliente.
+        </p>
+      </section>
+
+      <section aria-labelledby="p-finalidade">
+        <h2 id="p-finalidade">3. Para que usamos</h2>
+        <p>
+          Usamos nome e telefone somente para identificar você, confirmar, remarcar ou cancelar o
+          agendamento e, se necessário, avisar sobre alguma mudança no horário. Não vendemos nem
+          compartilhamos seus dados para publicidade.
+        </p>
+      </section>
+
+      <section aria-labelledby="p-base">
+        <h2 id="p-base">4. Base legal</h2>
+        <p>
+          O tratamento é feito com o seu <strong>consentimento</strong> (art. 7º, I, da LGPD),
+          manifestado ao marcar a caixa de concordância antes de confirmar o agendamento. A caixa
+          nunca vem marcada. Você pode retirar o consentimento a qualquer momento cancelando o
+          agendamento ou escrevendo para o contato abaixo.
+        </p>
+      </section>
+
+      <section aria-labelledby="p-retencao">
+        <h2 id="p-retencao">5. Por quanto tempo guardamos</h2>
+        <p>
+          Seus dados pessoais são <strong>anonimizados 90 dias após o atendimento</strong>. Depois
+          disso, resta apenas o registro do horário sem nome nem telefone, para fins estatísticos. O
+          link de gerenciamento do agendamento é guardado apenas como hash, nunca em texto puro.
+        </p>
+      </section>
+
+      <section aria-labelledby="p-direitos">
+        <h2 id="p-direitos">6. Seus direitos</h2>
+        <p>Conforme o art. 18 da LGPD, você pode pedir, a qualquer momento:</p>
+        <ul class="mt-2 list-disc space-y-1 pl-6">
+          <li>confirmação de que tratamos seus dados e acesso a eles;</li>
+          <li>correção de dados incompletos ou desatualizados;</li>
+          <li>anonimização, bloqueio ou eliminação de dados desnecessários;</li>
+          <li>informações sobre com quem os dados são compartilhados;</li>
+          <li>revogação do consentimento.</li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="p-terceiros">
+        <h2 id="p-terceiros">7. Terceiros, cookies e mapa</h2>
+        <p>
+          As fontes do site são hospedadas por nós, sem requisição a terceiros. O mapa do Google só
+          é carregado se você clicar em “Carregar mapa”; ao clicar, o Google pode tratar dados de
+          acordo com a política própria dele. O site não usa cookies de rastreamento ou publicidade.
+          Ao tocar no botão de WhatsApp você sai do site e passa a seguir a política do WhatsApp.
+        </p>
+      </section>
+
+      <section aria-labelledby="p-contato">
+        <h2 id="p-contato">8. Como exercer seus direitos</h2>
+        <p>
+          Escreva para{' '}
+          <a href={`mailto:${business.privacyEmail}`} class="prose-link">
+            {business.privacyEmail}
+          </a>{' '}
+          (endereço fictício). Em um projeto real, responderíamos em até 15 dias. Você também pode
+          reclamar à Autoridade Nacional de Proteção de Dados (ANPD).
+        </p>
+      </section>
+    </div>
+
+    <p class="mt-10">
+      <a href="/" class="prose-link">
+        Voltar ao site
+      </a>
+    </p>
+  </article>
+</BaseLayout>
