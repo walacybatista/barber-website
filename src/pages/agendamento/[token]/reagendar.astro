@@ -28,6 +28,7 @@ import {
 } from '@/lib/agendar';
 import { isValidLocalDate, weekdayOf } from '@/lib/time/tz';
 import { whatsappHref } from '@/lib/whatsapp';
+import { logError } from '@/lib/log';
 
 export const prerender = false;
 
@@ -61,7 +62,7 @@ if (/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
     booking = await getBookingByToken(getDb(), token);
     if (booking?.canManage) catalog = await listCatalog(getDb());
   } catch (err) {
-    console.error('[reagendar] falha ao carregar', err);
+    logError('[reagendar] falha ao carregar', err);
     failed = true;
   }
 }
@@ -135,7 +136,7 @@ if (canReschedule && booking && date && !barberUnavailable) {
     if (e instanceof BarberUnavailableError) {
       barberUnavailable = true;
     } else {
-      console.error('[reagendar] falha ao listar horários', e);
+      logError('[reagendar] falha ao listar horários', e);
       slotsError = true;
     }
   }

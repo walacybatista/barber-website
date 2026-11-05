@@ -1,22 +1,24 @@
 import { ActionError, defineAction, type ActionAPIContext } from 'astro:actions';
 import { z } from 'astro/zod';
 import { getDb } from '../db/client.ts';
-import { InvalidCredentialsError, login as loginService } from '../lib/auth/login.ts';
-import { RateLimitedError, consumeRateLimit } from '../lib/rate-limit.ts';
+import { mapErrorToAction } from '../lib/action-errors.ts';
+import { logError } from '../lib/log.ts';
+import { normalizeClientIp } from '../lib/client-ip.ts';
+import { login as loginService } from '../lib/auth/login.ts';
+import { consumeRateLimit } from '../lib/rate-limit.ts';
 import { createHash } from 'node:crypto';
 import {
   SESSION_COOKIE,
   deleteSession,
+  sessionCookieDeleteOptions,
   sessionCookieOptions,
   validateSession,
 } from '../lib/auth/sessions.ts';
-import { DomainError, InvalidStateError } from '../lib/booking/errors.ts';
 import {
   cancelBooking,
   createBooking,
   createTimeBlock,
   deleteTimeBlock,
-  getBookingByToken,
   listAvailability,
   markBookingStatus,
   rescheduleBooking,
@@ -27,30 +29,7 @@ import { isValidLocalDate, localToUtc } from '../lib/time/tz.ts';
 /** Fronteira HTTP fina: valida (zod), chama lib/ e traduz erros de domínio. */
 function toActionError(err: unknown): never {
   if (err instanceof ActionError) throw err;
-  if (err instanceof RateLimitedError) {
-    throw new ActionError({ code: 'TOO_MANY_REQUESTS', message: err.message });
-  }
-  if (err instanceof InvalidCredentialsError) {
-    throw new ActionError({ code: 'UNAUTHORIZED', message: err.message });
-  }
-  // Barbeiro inativo (reagendar): código próprio, para a página não confundir com "horário reservado".
-  if (err instanceof InvalidStateError && 'reason' in err && err.reason === 'BARBER_UNAVAILABLE') {
-    throw new ActionError({ code: 'PRECONDITION_FAILED', message: err.message });
-  }
-  if (err instanceof DomainError) {
-    const code =
-      err.code === 'TOO_MANY_BOOKINGS'
-        ? 'TOO_MANY_REQUESTS'
-        : err.code === 'SLOT_TAKEN' || err.code === 'INVALID_STATE'
-          ? 'CONFLICT'
-          : err.code === 'NOT_FOUND'
-            ? 'NOT_FOUND'
-            : err.code === 'TOO_LATE'
-              ? 'FORBIDDEN'
-              : 'BAD_REQUEST';
-    throw new ActionError({ code, message: err.message });
-  }
-  throw err;
+  throw new ActionError(mapErrorToAction(err) as ConstructorParameters<typeof ActionError>[0]);
 }
 
 /**
@@ -65,7 +44,7 @@ async function requireAdmin(context: ActionAPIContext) {
   try {
     session = await validateSession(getDb(), sid);
   } catch (err) {
-    console.error('requireAdmin: falha ao carregar sessão', err instanceof Error ? err.name : err);
+    logError('requireAdmin: falha ao carregar sessão', err);
     throw new ActionError({
       code: 'SERVICE_UNAVAILABLE',
       message: 'Serviço temporariamente indisponível. Tente novamente.',
@@ -77,10 +56,10 @@ async function requireAdmin(context: ActionAPIContext) {
   return session.user;
 }
 
-/** IP do cliente; sem `clientAddress` agrupa tudo em 'unknown' (limite fica mais rígido, não mais frouxo). */
+/** IP do cliente (IPv6 -> /64); sem `clientAddress` agrupa tudo em 'unknown' (limite mais rígido, não mais frouxo). */
 function clientIp(context: ActionAPIContext): string {
   try {
-    return context.clientAddress;
+    return normalizeClientIp(context.clientAddress);
   } catch {
     return 'unknown';
   }
@@ -91,7 +70,7 @@ const QUARTER_HOUR = /^([01]\d|2[0-3]):(00|15|30|45)$/;
 
 const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const isoInstant = z.iso.datetime({ offset: true }).transform((s) => new Date(s));
-const barberIdOrNull = z.number().int().positive().nullable().optional();
+const barberIdOrNull = z.number().int().positive().max(2147483647).nullable().optional();
 
 // Aceita "(11) 91234-5678": remove a máscara aqui (a Action é a fronteira; normalizePhone valida DDD/tamanho).
 const phone = z
@@ -114,7 +93,7 @@ export const server = {
   getAvailability: defineAction({
     input: z.object({
       date: localDate,
-      serviceId: z.number().int().positive(),
+      serviceId: z.number().int().positive().max(2147483647),
       barberId: barberIdOrNull,
     }),
     handler: async (input) => {
@@ -132,8 +111,8 @@ export const server = {
   createBooking: defineAction({
     accept: 'form',
     input: z.object({
-      serviceId: z.number({ error: 'Escolha um serviço.' }).int().positive(),
-      barberId: z.number().int().positive().nullable(),
+      serviceId: z.number({ error: 'Escolha um serviço.' }).int().positive().max(2147483647),
+      barberId: z.number().int().positive().max(2147483647).nullable(),
       startAt: z.iso
         .datetime({ offset: true, error: 'Escolha um horário.' })
         .transform((s) => new Date(s)),
@@ -216,16 +195,16 @@ export const server = {
     handler: async (_input, context) => {
       try {
         await deleteSession(getDb(), context.cookies.get(SESSION_COOKIE)?.value);
+        return { ok: true };
       } catch (err) {
-        console.error('logout: falha ao apagar sessão', err instanceof Error ? err.message : err);
+        logError('logout: falha ao apagar sessão', err);
         throw new ActionError({
           code: 'SERVICE_UNAVAILABLE',
           message: 'Serviço temporariamente indisponível. Tente novamente.',
         });
       } finally {
-        context.cookies.delete(SESSION_COOKIE, { path: '/' });
+        context.cookies.delete(SESSION_COOKIE, sessionCookieDeleteOptions());
       }
-      return { ok: true };
     },
   }),
 
@@ -235,7 +214,7 @@ export const server = {
     accept: 'form',
     input: z
       .object({
-        barberId: z.number({ error: 'Escolha o barbeiro.' }).int().positive(),
+        barberId: z.number({ error: 'Escolha o barbeiro.' }).int().positive().max(2147483647),
         date: z
           .string({ error: 'Informe a data.' })
           .regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe a data.')
@@ -257,8 +236,8 @@ export const server = {
         message: 'O fim deve ser depois do início.',
       }),
     handler: async (input, context) => {
-      const admin = await requireAdmin(context);
       try {
+        const admin = await requireAdmin(context);
         const b = await createTimeBlock(getDb(), {
           barberId: input.barberId,
           startAt: localToUtc(input.date, input.startTime),
@@ -275,10 +254,10 @@ export const server = {
 
   deleteTimeBlock: defineAction({
     accept: 'form',
-    input: z.object({ blockId: z.number().int().positive() }),
+    input: z.object({ blockId: z.number().int().positive().max(2147483647) }),
     handler: async ({ blockId }, context) => {
-      await requireAdmin(context);
       try {
+        await requireAdmin(context);
         await deleteTimeBlock(getDb(), blockId);
         return { ok: true };
       } catch (err) {
@@ -290,30 +269,16 @@ export const server = {
   setBookingStatus: defineAction({
     accept: 'form',
     input: z.object({
-      bookingId: z.number().int().positive(),
+      bookingId: z.number().int().positive().max(2147483647),
       status: z.enum(['cancelled', 'completed', 'no_show']),
     }),
     handler: async ({ bookingId, status }, context) => {
-      await requireAdmin(context);
       try {
+        await requireAdmin(context);
         return summary(await markBookingStatus(getDb(), bookingId, status));
       } catch (err) {
         return toActionError(err);
       }
-    },
-  }),
-
-  /** Para a página /agendamento/[token] também poderia chamar a lib direto; exposto por conveniência. */
-  getBooking: defineAction({
-    input: z.object({ token: z.string().min(20).max(100) }),
-    handler: async ({ token }) => {
-      const b = await getBookingByToken(getDb(), token);
-      if (!b) throw new ActionError({ code: 'NOT_FOUND', message: 'Agendamento não encontrado.' });
-      return {
-        ...b,
-        startAt: b.startAt.toISOString(),
-        endAt: b.endAt.toISOString(),
-      };
     },
   }),
 };

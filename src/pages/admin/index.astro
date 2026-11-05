@@ -14,6 +14,7 @@ import { getDb } from '@/db/client';
 import { listAgenda, listCatalog } from '@/lib/booking/repository';
 import { addDays, formatDateLong, formatTime } from '@/lib/agendar';
 import { isValidLocalDate, localToUtc, utcToLocalDate, weekdayOf } from '@/lib/time/tz';
+import { logError } from '@/lib/log';
 
 export const prerender = false;
 
@@ -53,7 +54,7 @@ try {
     to: localToUtc(addDays(days[days.length - 1], 1), '00:00'),
   });
 } catch (err) {
-  console.error('[admin] falha ao carregar agenda', err instanceof Error ? err.message : err);
+  logError('[admin] falha ao carregar agenda', err);
   failed = true;
   Astro.response.status = 503;
 }
@@ -346,7 +347,7 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
               </thead>
               <tbody role="rowgroup" class="max-md:block max-md:space-y-3">
                 {g.rows.map((r) => {
-                  const ctx = `${r.kind === 'booking' ? `de ${firstName(r.customer ?? '')} ` : ''}às ${formatTime(r.start)} com ${r.barberName}`;
+                  const ctx = `${r.kind === 'booking' ? `de ${firstName(r.customer ?? '')} ` : ''}${week ? `em ${formatDateLong(r.day)} ` : ''}às ${formatTime(r.start)} com ${r.barberName}`;
                   return (
                     <tr
                       role="row"
@@ -478,7 +479,7 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
                             <details>
                               <summary
                                 class={`${linkCls} cursor-pointer px-3`}
-                                aria-label={`Remover bloqueio de ${r.barberName} ${formatTime(r.start)}–${formatTime(r.end)}`}
+                                aria-label={`Remover bloqueio de ${r.barberName} ${week ? `em ${formatDateLong(r.day)} ` : ''}${formatTime(r.start)}–${formatTime(r.end)}`}
                               >
                                 Remover
                               </summary>

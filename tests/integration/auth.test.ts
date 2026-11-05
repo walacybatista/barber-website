@@ -11,6 +11,7 @@ import {
   login,
 } from '../../src/lib/auth/login.ts';
 import {
+  SESSION_ABSOLUTE_MAX_MS,
   SESSION_TTL_MS,
   createSession,
   deleteSession,
@@ -67,6 +68,40 @@ describe('sessões', () => {
       .from(sessions)
       .where(eq(sessions.idHash, hashSessionId(sessionId)));
     expect(row.expiresAt.getTime()).toBe(later.getTime() + SESSION_TTL_MS);
+  });
+
+  it('teto absoluto de 30 dias: renovação não ultrapassa e depois dele a sessão morre', async () => {
+    const { sessionId } = await createSession(db, userId, NOW);
+    const idHash = hashSessionId(sessionId);
+    const day = 24 * 3600_000;
+    const cap = NOW.getTime() + SESSION_ABSOLUTE_MAX_MS;
+    // dia 27: renova, mas limitado ao teto (dia 30), não a 27+7
+    await db
+      .update(sessions)
+      .set({ expiresAt: new Date(NOW.getTime() + 27 * day + 1000) })
+      .where(eq(sessions.idHash, idHash));
+    const d27 = new Date(NOW.getTime() + 27 * day);
+    const s = await validateSession(db, sessionId, d27);
+    expect(s?.renewed).toBe(true);
+    expect(s?.expiresAt.getTime()).toBe(cap);
+    // perto do teto: não renova de novo (nada a estender)
+    const d29 = new Date(NOW.getTime() + 29 * day);
+    const s2 = await validateSession(db, sessionId, d29);
+    expect(s2?.renewed).toBe(false);
+    expect(s2?.expiresAt.getTime()).toBe(cap);
+    // no teto: rejeitada e removida
+    expect(await validateSession(db, sessionId, new Date(cap))).toBeNull();
+    expect(await db.select().from(sessions)).toHaveLength(0);
+  });
+
+  it('teto absoluto vale mesmo com expiresAt no futuro', async () => {
+    const { sessionId } = await createSession(db, userId, NOW);
+    const later = new Date(NOW.getTime() + SESSION_ABSOLUTE_MAX_MS + 1000);
+    await db
+      .update(sessions)
+      .set({ expiresAt: new Date(later.getTime() + 3600_000) })
+      .where(eq(sessions.idHash, hashSessionId(sessionId)));
+    expect(await validateSession(db, sessionId, later)).toBeNull();
   });
 
   it('logout invalida', async () => {

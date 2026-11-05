@@ -2,9 +2,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import { eq, lt } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { adminUsers, sessions } from '../../db/schema.ts';
+import { sessionCookieName } from './cookie-name.ts';
 
-export const SESSION_COOKIE = 'session';
+/**
+ * Em produção `__Host-session` (o navegador exige `secure`, `path=/` e sem `domain`); fora dela
+ * `session` (dev/e2e em http). Fonte única para middleware, Actions e logout.
+ */
+export const SESSION_COOKIE = sessionCookieName(import.meta.env?.PROD === true);
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Teto ABSOLUTO desde `createdAt`: a renovação deslizante nunca o ultrapassa. */
+export const SESSION_ABSOLUTE_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 /** Renovação deslizante: só grava no banco se passou mais de 1 dia desde a última extensão. */
 const RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -26,7 +33,9 @@ export async function createSession(
 ): Promise<{ sessionId: string; expiresAt: Date }> {
   const sessionId = randomBytes(32).toString('base64url');
   const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
-  await db.insert(sessions).values({ idHash: hashSessionId(sessionId), userId, expiresAt });
+  await db
+    .insert(sessions)
+    .values({ idHash: hashSessionId(sessionId), userId, expiresAt, createdAt: now });
   // Limpeza oportunista de sessões vencidas.
   await db.delete(sessions).where(lt(sessions.expiresAt, now));
   return { sessionId, expiresAt };
@@ -43,6 +52,7 @@ export async function validateSession(
   const [row] = await db
     .select({
       expiresAt: sessions.expiresAt,
+      createdAt: sessions.createdAt,
       userId: adminUsers.id,
       username: adminUsers.username,
     })
@@ -50,16 +60,20 @@ export async function validateSession(
     .innerJoin(adminUsers, eq(adminUsers.id, sessions.userId))
     .where(eq(sessions.idHash, idHash));
   if (!row) return null;
-  if (row.expiresAt <= now) {
+  const absoluteEnd = new Date(row.createdAt.getTime() + SESSION_ABSOLUTE_MAX_MS);
+  if (row.expiresAt <= now || absoluteEnd <= now) {
     await db.delete(sessions).where(eq(sessions.idHash, idHash));
     return null;
   }
   let expiresAt = row.expiresAt;
   let renewed = false;
   if (expiresAt.getTime() - now.getTime() < SESSION_TTL_MS - RENEW_AFTER_MS) {
-    expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
-    await db.update(sessions).set({ expiresAt }).where(eq(sessions.idHash, idHash));
-    renewed = true;
+    const next = new Date(Math.min(now.getTime() + SESSION_TTL_MS, absoluteEnd.getTime()));
+    if (next > expiresAt) {
+      expiresAt = next;
+      await db.update(sessions).set({ expiresAt }).where(eq(sessions.idHash, idHash));
+      renewed = true;
+    }
   }
   return { user: { id: row.userId, username: row.username }, expiresAt, renewed };
 }
@@ -70,5 +84,22 @@ export async function deleteSession(db: Db, sessionId: string | undefined): Prom
 }
 
 export function sessionCookieOptions(expires: Date, secure: boolean) {
-  return { httpOnly: true, sameSite: 'lax' as const, secure, path: '/', expires };
+  // `__Host-` (produção) exige secure; força-o quando o nome tem o prefixo.
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: secure || SESSION_COOKIE.startsWith('__Host-'),
+    path: '/',
+    expires,
+  };
+}
+
+/** Opções para apagar o cookie: o navegador ignora a remoção de `__Host-` sem `Secure`. */
+export function sessionCookieDeleteOptions() {
+  return {
+    path: '/',
+    secure: SESSION_COOKIE.startsWith('__Host-'),
+    httpOnly: true,
+    sameSite: 'lax' as const,
+  };
 }

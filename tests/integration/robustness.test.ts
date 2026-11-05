@@ -210,6 +210,24 @@ describe('anonimização (LGPD)', () => {
   });
 });
 
+describe('anonimização: cancelado sem cancelledAt', () => {
+  it('usa createdAt como referência', async () => {
+    const c = await book({ time: '10:00' });
+    await db
+      .update(bookings)
+      .set({ status: 'cancelled', cancelledAt: null, createdAt: NOW })
+      .where(eq(bookings.id, c.booking.id));
+    expect(await anonymizeOldBookings(db, { now: new Date(NOW.getTime() + 29 * 86400_000) })).toBe(
+      0,
+    );
+    expect(await anonymizeOldBookings(db, { now: new Date(NOW.getTime() + 31 * 86400_000) })).toBe(
+      1,
+    );
+    const [row] = await db.select().from(bookings).where(eq(bookings.id, c.booking.id));
+    expect(row.customerName).toBe('Anonimizado');
+  });
+});
+
 describe('seed', () => {
   it('reativa itens presentes em business.ts que foram desativados', async () => {
     const { spawnSync } = await import('node:child_process');

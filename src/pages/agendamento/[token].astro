@@ -14,6 +14,7 @@ import { getBookingByToken } from '@/lib/booking/repository';
 import { formatDateTimeLong } from '@/lib/agendar';
 import { formatBRL } from '@/lib/format';
 import { whatsappHref } from '@/lib/whatsapp';
+import { logError } from '@/lib/log';
 
 export const prerender = false;
 
@@ -71,7 +72,7 @@ if (/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
   try {
     booking = await getBookingByToken(getDb(), token);
   } catch (err) {
-    console.error('[agendamento] falha ao buscar agendamento', err);
+    logError('[agendamento] falha ao buscar agendamento', err);
     failed = true;
   }
 }

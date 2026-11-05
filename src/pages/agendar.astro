@@ -31,6 +31,7 @@ import {
 import { formatBRL } from '@/lib/format';
 import { isValidLocalDate, weekdayOf } from '@/lib/time/tz';
 import { whatsappHref } from '@/lib/whatsapp';
+import { logError } from '@/lib/log';
 
 export const prerender = false;
 
@@ -81,7 +82,7 @@ let catalog: Awaited<ReturnType<typeof listCatalog>> | undefined;
 try {
   catalog = await listCatalog(getDb());
 } catch (err) {
-  console.error('[agendar] falha ao carregar catálogo', err);
+  logError('[agendar] falha ao carregar catálogo', err);
   Astro.response.status = 503;
 }
 
@@ -186,7 +187,7 @@ if (service && barber && date) {
       barberId: barber === 'any' ? null : barber.id,
     });
   } catch (e) {
-    console.error('[agendar] falha ao listar horários', e);
+    logError('[agendar] falha ao listar horários', e);
     slotsError = true;
   }
 }

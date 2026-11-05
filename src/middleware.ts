@@ -1,6 +1,12 @@
 import { defineMiddleware } from 'astro:middleware';
 import { getDb } from './db/client.ts';
-import { SESSION_COOKIE, sessionCookieOptions, validateSession } from './lib/auth/sessions.ts';
+import {
+  SESSION_COOKIE,
+  sessionCookieDeleteOptions,
+  sessionCookieOptions,
+  validateSession,
+} from './lib/auth/sessions.ts';
+import { logError } from './lib/log.ts';
 
 const LOGIN_PATH = '/admin/login';
 
@@ -24,10 +30,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
     } catch (err) {
       // Banco fora: rota pública segue como anônima; /admin responde 503 (abaixo).
       dbDown = true;
-      console.error(
-        'middleware: falha ao carregar sessão',
-        err instanceof Error ? err.message : err,
-      );
+      logError('middleware: falha ao carregar sessão', err);
     }
     if (session) {
       context.locals.admin = session.user;
@@ -39,7 +42,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
         );
       }
     } else if (!dbDown) {
-      context.cookies.delete(SESSION_COOKIE, { path: '/' });
+      context.cookies.delete(SESSION_COOKIE, sessionCookieDeleteOptions());
     }
   }
 

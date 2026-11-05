@@ -701,7 +701,11 @@ export async function anonymizeOldBookings(
         and(
           sql`${bookings.anonymizedAt} is null`,
           or(
-            and(eq(bookings.status, 'cancelled'), lt(bookings.cancelledAt, cancelledCutoff)),
+            and(
+              eq(bookings.status, 'cancelled'),
+              // cancelledAt nulo (legado/dados incompletos): usa createdAt como referência.
+              sql`coalesce(${bookings.cancelledAt}, ${bookings.createdAt}) < ${cancelledCutoff.toISOString()}::timestamptz`,
+            ),
             and(sql`${bookings.status} <> 'cancelled'`, lt(bookings.endAt, cutoff)),
           ),
         ),

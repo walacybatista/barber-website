@@ -3,6 +3,7 @@ import { business } from '@/data/business';
 import { getDb } from '@/db/client';
 import { getBookingByToken } from '@/lib/booking/repository';
 import { buildIcs } from '@/lib/ics';
+import { logError } from '@/lib/log';
 
 export const prerender = false;
 
@@ -25,7 +26,7 @@ export const GET: APIRoute = async ({ params }) => {
   try {
     booking = await getBookingByToken(getDb(), token);
   } catch (err) {
-    console.error('[agendamento.ics] falha ao buscar agendamento', err);
+    logError('[agendamento.ics] falha ao buscar agendamento', err);
     return new Response('Serviço indisponível. Tente de novo em instantes.', {
       status: 503,
       headers: {

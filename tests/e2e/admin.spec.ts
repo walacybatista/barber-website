@@ -10,6 +10,7 @@ import { eq } from 'drizzle-orm';
 import { createDb, loadDotEnv } from '../../src/db/client.ts';
 import { barbers, services } from '../../src/db/schema.ts';
 import { SlotTakenError } from '../../src/lib/booking/errors.ts';
+import { sessionCookieName } from '../../src/lib/auth/cookie-name.ts';
 import { createBooking } from '../../src/lib/booking/repository.ts';
 import { postForm, resetLoginAttempts } from './helpers.ts';
 
@@ -91,7 +92,7 @@ test.describe('login e logout', () => {
     await page.goto('/admin/login');
     await expect(page).toHaveURL(/\/admin$/);
 
-    const oldSession = (await context.cookies()).find((c) => c.name === 'session');
+    const oldSession = (await context.cookies()).find((c) => c.name === sessionCookieName(true));
     expect(oldSession).toBeDefined();
 
     await page.getByRole('button', { name: 'Sair' }).click();

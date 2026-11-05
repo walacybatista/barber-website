@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { E2E_ADMIN_PASSWORD, E2E_ADMIN_USER } from './admin-fixtures.ts';
 import { postForm, resetLoginAttempts } from './helpers.ts';
+import { sessionCookieName } from '../../src/lib/auth/cookie-name.ts';
 
 /**
  * Segurança das Actions e páginas admin: CSRF (mesmo com sessão válida), validação com sessão
@@ -26,7 +27,7 @@ async function sessionCookie(page: import('@playwright/test').Page): Promise<str
   await page.getByLabel('Senha').fill(E2E_ADMIN_PASSWORD);
   await page.getByRole('button', { name: 'Entrar' }).click();
   await expect(page).toHaveURL(/\/admin$/);
-  const c = (await page.context().cookies()).find((x) => x.name === 'session');
+  const c = (await page.context().cookies()).find((x) => x.name === sessionCookieName(true));
   expect(c, 'cookie de sessão').toBeDefined();
   return `${c!.name}=${c!.value}`;
 }

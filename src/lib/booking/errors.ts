@@ -63,11 +63,14 @@ export class InvalidInputError extends DomainError {
 
 /** Anti-spam: telefone já tem o máximo de agendamentos confirmados futuros. */
 export class TooManyBookingsError extends DomainError {
+  /** `max` fica só no objeto (logs/testes); a mensagem ao cliente não revela a contagem. */
+  max: number;
   constructor(max: number) {
     super(
       'TOO_MANY_BOOKINGS',
-      `Você já tem ${max} agendamentos futuros. Cancele um ou aguarde para marcar outro.`,
+      'Não foi possível concluir o agendamento por este telefone agora. Fale com a barbearia.',
     );
+    this.max = max;
   }
 }
 

@@ -1,4 +1,7 @@
-// Uso: npm run db:anonymize [-- <dias>]   (padrão 90; RN06). Agende em cron diário.
+// Uso: npm run db:anonymize [-- <dias>]   (padrão 90; RN06).
+// DEVE rodar diariamente (cron), p.ex.: 0 3 * * * cd /app && npm run db:anonymize
+// Sem a rotina, dados pessoais (nome/telefone) ficam retidos além do prazo da RN06/LGPD.
+// Cancelados sem `cancelled_at` usam `created_at` como referência.
 import { createDb, loadDotEnv, readEnv } from '../src/db/client.ts';
 import { anonymizeOldBookings } from '../src/lib/booking/repository.ts';
 

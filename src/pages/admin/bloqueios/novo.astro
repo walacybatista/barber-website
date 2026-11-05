@@ -16,6 +16,7 @@ import { noStoreRedirect, requireAdmin } from '../_guard';
 import { getDb } from '@/db/client';
 import { listCatalog } from '@/lib/booking/repository';
 import { isValidLocalDate, utcToLocalDate } from '@/lib/time/tz';
+import { logError } from '@/lib/log';
 
 export const prerender = false;
 
@@ -39,7 +40,7 @@ let failed = false;
 try {
   barbers = (await listCatalog(getDb())).barbers;
 } catch (err) {
-  console.error('[admin] falha ao carregar barbeiros', err instanceof Error ? err.message : err);
+  logError('[admin] falha ao carregar barbeiros', err);
   failed = true;
 }
 
