@@ -19,12 +19,12 @@ if (!result && !logout && Astro.locals.admin) return noStoreRedirect(Astro, '/ad
 
 let alert: { variant: 'error' | 'warning'; title: string; text: string } | undefined;
 if (logout?.error) {
-  // Falha ao sair: a sessão pode continuar ativa; avisa em vez de redirecionar em silêncio.
-  Astro.response.status = 500;
+  // O cookie local já foi apagado pela Action; só o encerramento no servidor falhou.
+  Astro.response.status = 503;
   alert = {
     variant: 'error',
-    title: 'Não foi possível sair',
-    text: 'Tente de novo. Se o erro persistir, feche o navegador.',
+    title: 'Não foi possível encerrar a sessão',
+    text: 'Você saiu neste navegador, mas não conseguimos encerrar a sessão no servidor.',
   };
 } else if (result?.error) {
   const code = result.error.code;

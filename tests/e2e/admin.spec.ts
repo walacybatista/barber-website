@@ -271,11 +271,12 @@ test.describe('status do atendimento e bloqueios', () => {
     await expect(rowOf(page, PAST.cancel.name)).toContainText('Cancelado');
   });
 
-  test('atendimento futuro: sem "Não compareceu"', async ({ page }) => {
+  test('atendimento futuro: sem "Concluído" nem "Não compareceu"', async ({ page }) => {
     await login(page);
     await page.goto(`/admin?data=${E2E_AGENDA_DATE}`);
     const row = rowOf(page, E2E_AGENDA_CUSTOMER);
-    await expect(row.getByRole('button', { name: 'Concluído' })).toBeVisible();
+    await expect(row.locator('summary', { hasText: 'Cancelar' })).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Concluído' })).toHaveCount(0);
     await expect(row.getByRole('button', { name: 'Não compareceu' })).toHaveCount(0);
   });
 

@@ -8,7 +8,12 @@ try {
 }
 
 // E2E_PORT permite rodar a suíte em outra porta quando a 4322 estiver ocupada.
-const PORT = Number(process.env.E2E_PORT ?? 4322);
+const PORT = Number(process.env.E2E_PORT) || 4322; // vazio/NaN/0 caem na padrão
+if (!Number.isInteger(PORT) || PORT < 1024 || PORT > 65535) {
+  throw new Error(
+    `E2E_PORT inválida (${process.env.E2E_PORT}): use um inteiro entre 1024 e 65535.`,
+  );
+}
 process.env.E2E_PORT = String(PORT); // repassa aos workers (tests/e2e/helpers.ts)
 const baseURL = `http://localhost:${PORT}`;
 

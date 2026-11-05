@@ -71,8 +71,15 @@ const notices: string[] = [];
 let alert: { variant: 'error' | 'warning'; title: string; text: string } | undefined;
 let status = failed ? 503 : booking ? 200 : 404;
 const err = result?.error;
+// Barbeiro inativo: antes da faixa de datas (catálogo só lista ativos) ou por corrida na Action.
+let barberUnavailable = Boolean(
+  canReschedule && booking && !catalog?.barbers.some((b) => b.id === booking.barber.id),
+);
 if (err) {
-  if (err.code === 'CONFLICT' && booking?.status === 'confirmed') {
+  if (err.code === 'PRECONDITION_FAILED') {
+    status = 409;
+    barberUnavailable = true;
+  } else if (err.code === 'CONFLICT' && booking?.status === 'confirmed') {
     status = 409;
     alert = {
       variant: 'error',
@@ -121,8 +128,7 @@ if (canReschedule && dateParam) {
 
 let slots: AvailableSlot[] = [];
 let slotsError = false;
-let barberUnavailable = false;
-if (canReschedule && booking && date) {
+if (canReschedule && booking && date && !barberUnavailable) {
   try {
     slots = await getRescheduleAvailability(getDb(), { token, date, now });
   } catch (e) {
@@ -186,7 +192,7 @@ const dayHref = (d: string) => `${pagePath}/reagendar?data=${d}#horarios`;
       </Alert>
     ) : (
       <>
-        {alert && (
+        {alert && !barberUnavailable && (
           <Alert variant={alert.variant} title={alert.title} class="mb-6" data-autofocus>
             <p>{alert.text}</p>
           </Alert>
@@ -208,60 +214,77 @@ const dayHref = (d: string) => `${pagePath}/reagendar?data=${d}#horarios`;
           <dd>{formatDateTimeLong(booking.startAt, true)}</dd>
         </dl>
 
-        <h2 class="text-h2 mb-4 font-semibold">Escolha o novo dia e horário</h2>
-        <DateStrip days={strip} selected={date} hrefFor={dayHref} />
-
-        <div id="horarios" class="mt-6">
-          {!date ? (
-            <p role="status" class="text-text-muted">
-              Escolha uma data acima para ver os horários livres.
+        {barberUnavailable ? (
+          <Alert
+            variant="warning"
+            title="Não é possível reagendar com este barbeiro"
+            data-autofocus
+          >
+            <p>
+              {booking.barber.name} não está mais disponível para novos horários. Fale com a
+              barbearia para remarcar.
             </p>
-          ) : barberUnavailable ? (
-            <Alert variant="warning" title="Este barbeiro não está mais disponível">
-              <p>Este barbeiro não está mais disponível. Fale com a barbearia.</p>
+            <div class="mt-3 flex flex-wrap gap-3">
               <Button
                 href={whatsappHref('Olá! Preciso alterar meu agendamento (projeto fictício).')}
                 external
                 variant="secondary"
-                class="mt-3"
               >
                 Falar no WhatsApp
               </Button>
-            </Alert>
-          ) : slotsError ? (
-            <Alert variant="error" title="Não foi possível carregar os horários">
-              <p>Tente de novo em instantes.</p>
-              <Button href={dayHref(date)} variant="secondary" class="mt-3">
-                Tentar de novo
+              <Button href={pagePath} variant="secondary">
+                Voltar ao agendamento
               </Button>
-            </Alert>
-          ) : groups.length === 0 ? (
-            <div
-              role="status"
-              class="bg-surface border-border-subtle rounded-md border p-6 text-center"
-            >
-              <h3 class="text-h3 font-semibold">Sem horários livres em {formatDateLong(date)}</h3>
-              <p class="text-text-muted mt-2">Escolha outra data na faixa acima.</p>
             </div>
-          ) : (
-            <form
-              method="POST"
-              action={`${pagePath}/reagendar${actions.rescheduleBooking}&data=${date}`}
-            >
-              <input type="hidden" name="token" value={token} />
-              <TimeSlotGrid groups={groups} dateLabel={formatDateLong(date)} name="startAt" />
-              <Button type="submit" class="mt-6 w-full sm:w-auto">
-                Confirmar novo horário
-              </Button>
-            </form>
-          )}
-        </div>
+          </Alert>
+        ) : (
+          <>
+            <h2 class="text-h2 mb-4 font-semibold">Escolha o novo dia e horário</h2>
+            <DateStrip days={strip} selected={date} hrefFor={dayHref} />
 
-        <p class="mt-8">
-          <a class="prose-link" href={pagePath}>
-            Voltar ao agendamento
-          </a>
-        </p>
+            <div id="horarios" class="mt-6">
+              {!date ? (
+                <p role="status" class="text-text-muted">
+                  Escolha uma data acima para ver os horários livres.
+                </p>
+              ) : slotsError ? (
+                <Alert variant="error" title="Não foi possível carregar os horários">
+                  <p>Tente de novo em instantes.</p>
+                  <Button href={dayHref(date)} variant="secondary" class="mt-3">
+                    Tentar de novo
+                  </Button>
+                </Alert>
+              ) : groups.length === 0 ? (
+                <div
+                  role="status"
+                  class="bg-surface border-border-subtle rounded-md border p-6 text-center"
+                >
+                  <h3 class="text-h3 font-semibold">
+                    Sem horários livres em {formatDateLong(date)}
+                  </h3>
+                  <p class="text-text-muted mt-2">Escolha outra data na faixa acima.</p>
+                </div>
+              ) : (
+                <form
+                  method="POST"
+                  action={`${pagePath}/reagendar${actions.rescheduleBooking}&data=${date}`}
+                >
+                  <input type="hidden" name="token" value={token} />
+                  <TimeSlotGrid groups={groups} dateLabel={formatDateLong(date)} name="startAt" />
+                  <Button type="submit" class="mt-6 w-full sm:w-auto">
+                    Confirmar novo horário
+                  </Button>
+                </form>
+              )}
+            </div>
+
+            <p class="mt-8">
+              <a class="prose-link" href={pagePath}>
+                Voltar ao agendamento
+              </a>
+            </p>
+          </>
+        )}
       </>
     )}
   </Container>

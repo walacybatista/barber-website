@@ -1,7 +1,6 @@
-import http from 'node:http';
 import { expect, test, type Page } from '@playwright/test';
 import { createDb, loadDotEnv } from '../../src/db/client.ts';
-import { E2E_PORT, ORIGIN, postForm } from './helpers.ts';
+import { postForm, postHeadersOnly } from './helpers.ts';
 import { generateToken, hashToken } from '../../src/lib/booking/token.ts';
 
 /**
@@ -40,6 +39,14 @@ async function freeSlots(page: Page, day: string): Promise<string[]> {
 }
 
 let phoneSeq = 0;
+
+// Horário único para testes em que o horário não importa: cada chamada avança 1 h a partir
+// de +40 dias, então fixtures nunca colidem entre si na EXCLUDE de busy_periods.
+let anySlotSeq = 0;
+function anyFreeStart(): Date {
+  const base = Date.now() + 40 * 86_400_000;
+  return new Date(Math.floor(base / 3_600_000) * 3_600_000 + anySlotSeq++ * 3_600_000);
+}
 /** Cria um agendamento confirmado direto no banco e2e e devolve o token. */
 async function insertBooking(startAt: Date, status = 'confirmed'): Promise<string> {
   loadDotEnv();
@@ -79,34 +86,6 @@ async function dbStatus(token: string): Promise<string> {
   } finally {
     await sql.end();
   }
-}
-
-/** POST cru com controle total dos cabeçalhos (fetch descarta Origin). */
-function rawPost(path: string, headers: Record<string, string>, body?: string) {
-  return new Promise<number>((resolve, reject) => {
-    const req = http.request(
-      {
-        host: 'localhost',
-        port: E2E_PORT,
-        path,
-        method: 'POST',
-        // Sec-Fetch-Site: same-origin como um navegador (o Astro prioriza esse cabeçalho; só Origin cai em 403).
-        headers: {
-          Host: `localhost:${E2E_PORT}`,
-          Origin: ORIGIN,
-          'Sec-Fetch-Site': 'same-origin',
-          ...headers,
-        },
-      },
-      (res) => {
-        res.resume();
-        res.on('end', () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on('error', reject);
-    if (body !== undefined) req.write(body);
-    req.end();
-  });
 }
 
 test.describe.serial('gestão por token sem JS', () => {
@@ -244,24 +223,19 @@ test.describe.serial('gestão por token sem JS', () => {
   });
 
   test('corpo > 16 KB na Action responde 413', async () => {
-    const body = `serviceId=1&pad=${'a'.repeat(20_000)}`;
-    const status = await rawPost(
-      '/agendar?_action=createBooking',
-      {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': String(Buffer.byteLength(body)),
-      },
-      body,
-    );
+    const status = await postForm('/agendar?_action=createBooking', {
+      serviceId: '1',
+      pad: 'a'.repeat(20_000),
+    });
     expect(status).toBe(413);
   });
 
   test('POST sem content-length em /agendar responde 411', async () => {
     // Sem Content-Length, o node:http usa Transfer-Encoding: chunked.
-    const status = await rawPost(
+    const status = await postForm(
       '/agendar',
-      { 'Content-Type': 'application/x-www-form-urlencoded' },
-      'servico=corte-classico',
+      { servico: 'corte-classico' },
+      { 'Content-Length': '' },
     );
     expect(status).toBe(411);
   });
@@ -311,7 +285,7 @@ test.describe.serial('gestão por token sem JS', () => {
   });
 
   test('CSRF: cross-site e Origin estranho recebem 403', async () => {
-    const token = await insertBooking(new Date(Date.now() + 5 * 86_400_000));
+    const token = await insertBooking(anyFreeStart());
     const path = `/agendamento/${token}?_action=cancelBooking`;
     expect(await postForm(path, { token }, { 'Sec-Fetch-Site': 'cross-site' })).toBe(403);
     expect(
@@ -320,13 +294,18 @@ test.describe.serial('gestão por token sem JS', () => {
     expect(await dbStatus(token)).toBe('confirmed');
   });
 
-  test('POST sem _action em /reagendar com corpo grande responde 200 (prova de não-leitura: TODO socket com Content-Length sem corpo)', async () => {
-    // Horário irrelevante aqui; +25 dias evita colidir (EXCLUDE) com fixtures de outros testes.
-    const token = await insertBooking(new Date(Date.now() + 25 * 86_400_000));
-    const status = await postForm(`/agendamento/${token}/reagendar`, {
-      data: DAY_OVERLAP,
-      pad: 'a'.repeat(200_000),
+  for (const [name, suffix] of [
+    ['/reagendar', '/reagendar'],
+    ['/agendamento/<token>', ''],
+  ]) {
+    test(`POST sem _action em ${name} não lê o corpo (Content-Length 10 MB sem corpo responde em < 3 s)`, async () => {
+      const token = await insertBooking(anyFreeStart());
+      const { status, elapsedMs } = await postHeadersOnly(
+        `/agendamento/${token}${suffix}`,
+        10_000_000,
+      );
+      expect(status).toBe(200);
+      expect(elapsedMs).toBeLessThan(3000);
     });
-    expect(status).toBe(200);
-  });
+  }
 });

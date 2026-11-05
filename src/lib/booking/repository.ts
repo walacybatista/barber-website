@@ -498,7 +498,8 @@ export async function rescheduleBooking(
       await lockBarber(tx, b.barberId);
       if (b.status !== 'confirmed') throw new InvalidStateError();
       if (!canManage(b.startAt, now)) throw new TooLateError();
-      // Barbeiro inativo: recusa (regra do tech-lead). lockBarber já serializa contra desativação.
+      // Barbeiro inativo: recusa (regra do tech-lead). Nada desativa barbeiro concorrentemente no MVP;
+      // este select (READ COMMITTED) não trava a linha: vale o estado lido agora.
       const [barber] = await tx
         .select({ active: barbers.active })
         .from(barbers)

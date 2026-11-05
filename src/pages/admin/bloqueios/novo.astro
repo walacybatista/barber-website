@@ -12,7 +12,7 @@ import Button from '@/components/Button.astro';
 import Container from '@/components/Container.astro';
 import FieldError from '@/components/form/FieldError.astro';
 import Input from '@/components/form/Input.astro';
-import { requireAdmin } from '../_guard';
+import { noStoreRedirect, requireAdmin } from '../_guard';
 import { getDb } from '@/db/client';
 import { listCatalog } from '@/lib/booking/repository';
 import { isValidLocalDate, utcToLocalDate } from '@/lib/time/tz';
@@ -67,6 +67,11 @@ if (result && !result.error) {
   return res;
 }
 
+// Sessão expirou entre o middleware e o handler: volta ao login (não é falha do servidor).
+if (result?.error && (result.error.code === 'UNAUTHORIZED' || result.error.code === 'FORBIDDEN')) {
+  return noStoreRedirect(Astro, '/admin/login');
+}
+
 let alert: { variant: 'error' | 'warning'; title: string; text: string } | undefined;
 const fieldErrors: Record<string, string | undefined> = {};
 if (failed) {
@@ -110,7 +115,8 @@ if (failed) {
   }
 }
 
-// Horários de 15 em 15 min (a Action também valida).
+// Horários de 15 em 15 min (a Action também valida). O seletor vai até 23:45: o expediente
+// fictício termina antes e bloquear madrugada não é caso de uso do MVP.
 const times: string[] = [];
 for (let m = 6 * 60; m < 24 * 60; m += 15) {
   times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
@@ -122,6 +128,15 @@ const back = (() => {
   if (queryBarber) p.set('barbeiro', queryBarber.slug);
   const s = p.toString();
   return `/admin${s ? `?${s}` : ''}`;
+})();
+// Action URL preserva data/barbeiro/visão da query: após erro, "Voltar" mantém o contexto da agenda.
+const actionHref = (() => {
+  const p = new URLSearchParams();
+  if (isValidLocalDate(queryDate)) p.set('data', queryDate);
+  if (q.get('visao') === 'semana') p.set('visao', 'semana');
+  if (queryBarber) p.set('barbeiro', queryBarber.slug);
+  const s = p.toString();
+  return `/admin/bloqueios/novo${s ? `?${s}&` : '?'}_action=createTimeBlock`;
 })();
 const fieldCls =
   'bg-surface text-text border-border-strong hover:border-text-muted focus:border-focus focus:outline-focus min-h-12 w-full rounded-md border px-3 focus:outline-[3px] focus:outline-offset-0';
@@ -144,7 +159,7 @@ const err = (k: string) => (fieldErrors[k] ? 'border-error border-2' : '');
     )}
 
     {!failed && (
-      <form method="POST" action={actions.createTimeBlock} class="grid gap-5">
+      <form method="POST" action={actionHref} class="grid gap-5">
         <div>
           <label for="barberId" class="mb-1 block font-medium">
             Barbeiro

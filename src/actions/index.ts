@@ -10,7 +10,7 @@ import {
   sessionCookieOptions,
   validateSession,
 } from '../lib/auth/sessions.ts';
-import { DomainError } from '../lib/booking/errors.ts';
+import { DomainError, InvalidStateError } from '../lib/booking/errors.ts';
 import {
   cancelBooking,
   createBooking,
@@ -32,6 +32,10 @@ function toActionError(err: unknown): never {
   }
   if (err instanceof InvalidCredentialsError) {
     throw new ActionError({ code: 'UNAUTHORIZED', message: err.message });
+  }
+  // Barbeiro inativo (reagendar): código próprio, para a página não confundir com "horário reservado".
+  if (err instanceof InvalidStateError && 'reason' in err && err.reason === 'BARBER_UNAVAILABLE') {
+    throw new ActionError({ code: 'PRECONDITION_FAILED', message: err.message });
   }
   if (err instanceof DomainError) {
     const code =

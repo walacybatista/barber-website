@@ -9,7 +9,7 @@ import AdminLayout from '@/layouts/AdminLayout.astro';
 import Alert from '@/components/form/Alert.astro';
 import Button from '@/components/Button.astro';
 import Container from '@/components/Container.astro';
-import { requireAdmin } from './_guard';
+import { noStoreRedirect, requireAdmin } from './_guard';
 import { getDb } from '@/db/client';
 import { listAgenda, listCatalog } from '@/lib/booking/repository';
 import { addDays, formatDateLong, formatTime } from '@/lib/agendar';
@@ -168,6 +168,10 @@ if (okKey) {
 }
 let actionAlert: { title: string; text: string } | undefined;
 const actionError = statusResult?.error ?? removeResult?.error;
+// Sessão expirou entre o middleware e o handler: volta ao login (não é falha do servidor).
+if (actionError && (actionError.code === 'UNAUTHORIZED' || actionError.code === 'FORBIDDEN')) {
+  return noStoreRedirect(Astro, '/admin/login');
+}
 if (actionError) {
   const c = actionError.code;
   if (c === 'CONFLICT') {
@@ -209,6 +213,7 @@ const linkCls =
 // Mobile: a tabela vira cards (display:block); papéis ARIA explícitos mantêm a semântica de tabela
 // e cada célula mostra o rótulo visível (md:hidden; leitores usam os cabeçalhos sr-only).
 const cell = 'px-3 py-3 max-md:flex max-md:gap-2 max-md:px-0 max-md:py-1';
+const firstName = (n: string) => n.trim().split(/\s+/)[0] ?? n;
 const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
 ---
 
@@ -340,144 +345,161 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
                 </tr>
               </thead>
               <tbody role="rowgroup" class="max-md:block max-md:space-y-3">
-                {g.rows.map((r) => (
-                  <tr
-                    role="row"
-                    class:list={[
-                      'border-border-subtle border-b max-md:bg-surface max-md:block max-md:rounded-lg max-md:border max-md:p-3',
-                      r.kind === 'block' && 'bg-surface-2',
-                      r.status === 'cancelled' && 'text-text-muted',
-                    ]}
-                  >
-                    <td role="cell" class={`${cell} font-semibold whitespace-nowrap`}>
-                      <span aria-hidden="true" class={lbl}>
-                        Horário
-                      </span>
-                      <span>
-                        {formatTime(r.start)} - {formatTime(r.end)}
-                      </span>
-                    </td>
-                    {week && (
+                {g.rows.map((r) => {
+                  const ctx = `${r.kind === 'booking' ? `de ${firstName(r.customer ?? '')} ` : ''}às ${formatTime(r.start)} com ${r.barberName}`;
+                  return (
+                    <tr
+                      role="row"
+                      class:list={[
+                        'border-border-subtle border-b max-md:bg-surface max-md:block max-md:rounded-lg max-md:border max-md:p-3',
+                        r.kind === 'block' && 'bg-surface-2',
+                        r.status === 'cancelled' && 'text-text-muted',
+                      ]}
+                    >
+                      <td role="cell" class={`${cell} font-semibold whitespace-nowrap`}>
+                        <span aria-hidden="true" class={lbl}>
+                          Horário
+                        </span>
+                        <span>
+                          {formatTime(r.start)} - {formatTime(r.end)}
+                        </span>
+                      </td>
+                      {week && (
+                        <td role="cell" class={cell}>
+                          <span aria-hidden="true" class={lbl}>
+                            Barbeiro
+                          </span>
+                          <span>{r.barberName}</span>
+                        </td>
+                      )}
                       <td role="cell" class={cell}>
                         <span aria-hidden="true" class={lbl}>
-                          Barbeiro
+                          Serviço
                         </span>
-                        <span>{r.barberName}</span>
-                      </td>
-                    )}
-                    <td role="cell" class={cell}>
-                      <span aria-hidden="true" class={lbl}>
-                        Serviço
-                      </span>
-                      <span>
-                        {r.kind === 'block' ? (
-                          <>
-                            <strong>Bloqueio</strong> · {r.title}
-                          </>
-                        ) : (
-                          r.title
-                        )}
-                      </span>
-                    </td>
-                    <td role="cell" class={cell}>
-                      <span aria-hidden="true" class={lbl}>
-                        Cliente
-                      </span>
-                      {r.kind === 'booking' ? (
                         <span>
-                          {r.customer}
-                          <span class="text-text-muted block text-sm">{phoneLabel(r.phone!)}</span>
+                          {r.kind === 'block' ? (
+                            <>
+                              <strong>Bloqueio</strong> · {r.title}
+                            </>
+                          ) : (
+                            r.title
+                          )}
                         </span>
-                      ) : (
-                        <span class="text-text-muted">—</span>
-                      )}
-                    </td>
-                    <td role="cell" class={cell}>
-                      <span aria-hidden="true" class={lbl}>
-                        Status
-                      </span>
-                      {r.kind === 'booking' ? (
-                        <span class="inline-flex items-center gap-2">
-                          <span
-                            aria-hidden="true"
-                            class={`h-2.5 w-2.5 rounded-full ${STATUS[r.status!]?.dot ?? 'bg-disabled'}`}
-                          />
-                          {STATUS[r.status!]?.label ?? r.status}
+                      </td>
+                      <td role="cell" class={cell}>
+                        <span aria-hidden="true" class={lbl}>
+                          Cliente
                         </span>
-                      ) : (
-                        <span>Bloqueado</span>
-                      )}
-                    </td>
-                    <td role="cell" class={cell}>
-                      <span aria-hidden="true" class={lbl}>
-                        Ações
-                      </span>
-                      <div>
-                        {r.kind === 'booking' && r.status === 'confirmed' && (
-                          <div class="flex flex-wrap items-start gap-2">
-                            <form method="POST" action={actionUrl('setBookingStatus')}>
-                              <input type="hidden" name="bookingId" value={r.id} />
-                              <input type="hidden" name="status" value="completed" />
-                              <Button
-                                type="submit"
-                                variant="secondary"
-                                class="px-3"
-                                aria-label={`Concluído, atendimento das ${formatTime(r.start)}`}
-                              >
-                                Concluído
-                              </Button>
-                            </form>
-                            {r.start <= now && (
-                              <form method="POST" action={actionUrl('setBookingStatus')}>
-                                <input type="hidden" name="bookingId" value={r.id} />
-                                <input type="hidden" name="status" value="no_show" />
-                                <Button
-                                  type="submit"
-                                  variant="secondary"
-                                  class="px-3"
-                                  aria-label={`Não compareceu, atendimento das ${formatTime(r.start)}`}
+                        {r.kind === 'booking' ? (
+                          <span>
+                            {r.customer}
+                            <span class="text-text-muted block text-sm">
+                              {phoneLabel(r.phone!)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span class="text-text-muted">—</span>
+                        )}
+                      </td>
+                      <td role="cell" class={cell}>
+                        <span aria-hidden="true" class={lbl}>
+                          Status
+                        </span>
+                        {r.kind === 'booking' ? (
+                          <span class="inline-flex items-center gap-2">
+                            <span
+                              aria-hidden="true"
+                              class={`h-2.5 w-2.5 rounded-full ${STATUS[r.status!]?.dot ?? 'bg-disabled'}`}
+                            />
+                            {STATUS[r.status!]?.label ?? r.status}
+                          </span>
+                        ) : (
+                          <span>Bloqueado</span>
+                        )}
+                      </td>
+                      <td role="cell" class={cell}>
+                        <span aria-hidden="true" class={lbl}>
+                          Ações
+                        </span>
+                        <div>
+                          {r.kind === 'booking' && r.status === 'confirmed' && (
+                            <div class="flex flex-wrap items-start gap-2">
+                              {r.start <= now && (
+                                <form method="POST" action={actionUrl('setBookingStatus')}>
+                                  <input type="hidden" name="bookingId" value={r.id} />
+                                  <input type="hidden" name="status" value="completed" />
+                                  <Button
+                                    type="submit"
+                                    variant="secondary"
+                                    class="px-3"
+                                    aria-label={`Concluído: atendimento ${ctx}`}
+                                  >
+                                    Concluído
+                                  </Button>
+                                </form>
+                              )}
+                              {r.start <= now && (
+                                <form method="POST" action={actionUrl('setBookingStatus')}>
+                                  <input type="hidden" name="bookingId" value={r.id} />
+                                  <input type="hidden" name="status" value="no_show" />
+                                  <Button
+                                    type="submit"
+                                    variant="secondary"
+                                    class="px-3"
+                                    aria-label={`Não compareceu: atendimento ${ctx}`}
+                                  >
+                                    Não compareceu
+                                  </Button>
+                                </form>
+                              )}
+                              <details class="w-full">
+                                <summary
+                                  class={`${linkCls} cursor-pointer px-3`}
+                                  aria-label={`Cancelar atendimento ${ctx}`}
                                 >
-                                  Não compareceu
-                                </Button>
-                              </form>
-                            )}
-                            <details class="w-full">
-                              <summary class={`${linkCls} cursor-pointer px-3`}>Cancelar</summary>
+                                  Cancelar
+                                </summary>
+                                <form
+                                  method="POST"
+                                  action={actionUrl('setBookingStatus')}
+                                  class="mt-2 grid gap-2"
+                                >
+                                  <input type="hidden" name="bookingId" value={r.id} />
+                                  <input type="hidden" name="status" value="cancelled" />
+                                  <p>Cancelar este atendimento? O horário volta a ficar livre.</p>
+                                  <Button type="submit" class="px-3">
+                                    Confirmar cancelamento
+                                  </Button>
+                                </form>
+                              </details>
+                            </div>
+                          )}
+                          {r.kind === 'block' && (
+                            <details>
+                              <summary
+                                class={`${linkCls} cursor-pointer px-3`}
+                                aria-label={`Remover bloqueio de ${r.barberName} ${formatTime(r.start)}–${formatTime(r.end)}`}
+                              >
+                                Remover
+                              </summary>
                               <form
                                 method="POST"
-                                action={actionUrl('setBookingStatus')}
+                                action={actionUrl('deleteTimeBlock')}
                                 class="mt-2 grid gap-2"
                               >
-                                <input type="hidden" name="bookingId" value={r.id} />
-                                <input type="hidden" name="status" value="cancelled" />
-                                <p>Cancelar este atendimento? O horário volta a ficar livre.</p>
+                                <input type="hidden" name="blockId" value={r.id} />
+                                <p>Remover este bloqueio? O horário volta a ficar livre.</p>
                                 <Button type="submit" class="px-3">
-                                  Confirmar cancelamento
+                                  Confirmar remoção
                                 </Button>
                               </form>
                             </details>
-                          </div>
-                        )}
-                        {r.kind === 'block' && (
-                          <details>
-                            <summary class={`${linkCls} cursor-pointer px-3`}>Remover</summary>
-                            <form
-                              method="POST"
-                              action={actionUrl('deleteTimeBlock')}
-                              class="mt-2 grid gap-2"
-                            >
-                              <input type="hidden" name="blockId" value={r.id} />
-                              <p>Remover este bloqueio? O horário volta a ficar livre.</p>
-                              <Button type="submit" class="px-3">
-                                Confirmar remoção
-                              </Button>
-                            </form>
-                          </details>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </section>

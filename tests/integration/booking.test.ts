@@ -288,7 +288,7 @@ describe('disponibilidade, agenda e status', () => {
   });
 
   it('reagendar com barbeiro inativo: recusa no reschedule e na disponibilidade', async () => {
-    const { booking, token } = await book({ time: '10:00' });
+    const { token } = await book({ time: '10:00' });
     await db.execute(dsql`UPDATE barbers SET active = false WHERE id = ${ctx.b1.id}`);
     await expect(
       getRescheduleAvailability(db, { token, date: DAY, now: NOW }),
@@ -303,7 +303,15 @@ describe('disponibilidade, agenda e status', () => {
     });
     const view = await getBookingByToken(db, token, NOW);
     expect(view?.startAt.toISOString()).toBe(at('10:00').toISOString());
-    expect(booking.id).toBeDefined();
+  });
+
+  it('cancelBooking continua funcionando com barbeiro inativo', async () => {
+    const { token } = await book({ time: '10:00' });
+    await db.execute(dsql`UPDATE barbers SET active = false WHERE id = ${ctx.b1.id}`);
+    const c = await cancelBooking(db, token, NOW);
+    expect(c.status).toBe('cancelled');
+    const view = await getBookingByToken(db, token, NOW);
+    expect(view?.status).toBe('cancelled');
   });
 
   it('markBookingStatus e listAgenda', async () => {
