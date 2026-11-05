@@ -2,8 +2,10 @@ import { sql as dsql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { barbers, bookings, busyPeriods } from '../../src/db/schema.ts';
 import {
+  BarberUnavailableError,
   BlockConflictError,
   InvalidSlotError,
+  NotFoundError,
   SlotTakenError,
   TooLateError,
   TooManyBookingsError,
@@ -251,6 +253,57 @@ describe('disponibilidade, agenda e status', () => {
     // 17:15 + 60 min passa do fechamento (18:00): duração de 60 min respeitada.
     expect(has(inactive, '17:15')).toBe(false);
     expect(has(inactive, '17:00')).toBe(true);
+  });
+
+  it('ignoreBookingId não libera time_block nem agendamento de outro cliente', async () => {
+    const { booking, token } = await book({ serviceId: ctx.svc60.id, time: '10:00' });
+    await createTimeBlock(db, { barberId: ctx.b1.id, startAt: at('11:00'), endAt: at('12:00') });
+    await book({ serviceId: ctx.svc60.id, time: '14:00', customerPhone: '(11) 98888-7777' });
+    const has = (slots: { start: Date }[], t: string) =>
+      slots.some((s) => s.start.getTime() === at(t).getTime());
+    const base = { date: DAY, serviceId: ctx.svc60.id, barberId: ctx.b1.id, now: NOW };
+    const viaId = await listAvailability(db, { ...base, ignoreBookingId: booking.id });
+    const viaToken = await getRescheduleAvailability(db, { token, date: DAY, now: NOW });
+    for (const slots of [viaId, viaToken]) {
+      expect(has(slots, '10:00')).toBe(true); // próprio horário liberado
+      expect(has(slots, '09:15')).toBe(true); // 09:15-10:15 só sobrepõe o próprio
+      expect(has(slots, '10:15')).toBe(false); // 10:15-11:15 invade o time_block
+      expect(has(slots, '11:00')).toBe(false); // dentro do time_block
+      expect(has(slots, '12:00')).toBe(true);
+      expect(has(slots, '13:00')).toBe(true);
+      expect(has(slots, '13:15')).toBe(false); // invade agendamento de outro cliente
+      expect(has(slots, '14:00')).toBe(false);
+    }
+  });
+
+  it('reagendar: token cancelado -> [], desconhecido -> NotFoundError', async () => {
+    const { token } = await book({ time: '10:00' });
+    await cancelBooking(db, token, NOW);
+    await expect(getRescheduleAvailability(db, { token, date: DAY, now: NOW })).resolves.toEqual(
+      [],
+    );
+    await expect(
+      getRescheduleAvailability(db, { token: 'x'.repeat(43), date: DAY, now: NOW }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('reagendar com barbeiro inativo: recusa no reschedule e na disponibilidade', async () => {
+    const { booking, token } = await book({ time: '10:00' });
+    await db.execute(dsql`UPDATE barbers SET active = false WHERE id = ${ctx.b1.id}`);
+    await expect(
+      getRescheduleAvailability(db, { token, date: DAY, now: NOW }),
+    ).rejects.toBeInstanceOf(BarberUnavailableError);
+    await expect(rescheduleBooking(db, token, at('11:00'), { now: NOW })).rejects.toBeInstanceOf(
+      BarberUnavailableError,
+    );
+    // Compatível com o mapeamento da Action (INVALID_STATE -> CONFLICT) e sem mudar o agendamento.
+    await expect(rescheduleBooking(db, token, at('11:00'), { now: NOW })).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      reason: 'BARBER_UNAVAILABLE',
+    });
+    const view = await getBookingByToken(db, token, NOW);
+    expect(view?.startAt.toISOString()).toBe(at('10:00').toISOString());
+    expect(booking.id).toBeDefined();
   });
 
   it('markBookingStatus e listAgenda', async () => {

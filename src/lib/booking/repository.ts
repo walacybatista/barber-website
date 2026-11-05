@@ -11,6 +11,7 @@ import {
 } from '../../db/schema.ts';
 import { DEFAULT_TIMEZONE, isValidLocalDate, localToUtc, utcToLocalDate } from '../time/tz.ts';
 import {
+  BarberUnavailableError,
   BlockConflictError,
   InvalidInputError,
   InvalidSlotError,
@@ -227,6 +228,11 @@ export async function getRescheduleAvailability(
     .where(eq(bookings.manageTokenHash, hashToken(input.token)));
   if (!b) throw new NotFoundError('Agendamento');
   if (b.status !== 'confirmed') return [];
+  const [barber] = await db
+    .select({ active: barbers.active })
+    .from(barbers)
+    .where(eq(barbers.id, b.barberId));
+  if (!barber?.active) throw new BarberUnavailableError();
   return listAvailability(db, {
     date: input.date,
     serviceId: b.serviceId,
@@ -492,6 +498,12 @@ export async function rescheduleBooking(
       await lockBarber(tx, b.barberId);
       if (b.status !== 'confirmed') throw new InvalidStateError();
       if (!canManage(b.startAt, now)) throw new TooLateError();
+      // Barbeiro inativo: recusa (regra do tech-lead). lockBarber já serializa contra desativação.
+      const [barber] = await tx
+        .select({ active: barbers.active })
+        .from(barbers)
+        .where(eq(barbers.id, b.barberId));
+      if (!barber?.active) throw new BarberUnavailableError();
       // Duração ORIGINAL do agendamento (o serviço pode ter sido editado ou desativado depois).
       const durationMin = Math.round((b.endAt.getTime() - b.startAt.getTime()) / MIN);
       const check = checkBookingStart({

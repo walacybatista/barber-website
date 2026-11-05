@@ -1,7 +1,13 @@
 ---
-/** Agenda do painel (somente leitura): dia ou semana, filtro por barbeiro. Sem JavaScript. */
+/**
+ * Agenda do painel: dia ou semana, filtro por barbeiro, status do atendimento e remoção de bloqueio.
+ * Tudo por <form method="POST"> (Actions accept: 'form'), sem JavaScript; confirmações em <details>.
+ * Sucesso: PRG 303 para esta mesma agenda (data/visão/barbeiro) com `?ok=<chave>` (sem PII).
+ */
+import { actions } from 'astro:actions';
 import AdminLayout from '@/layouts/AdminLayout.astro';
 import Alert from '@/components/form/Alert.astro';
+import Button from '@/components/Button.astro';
 import Container from '@/components/Container.astro';
 import { requireAdmin } from './_guard';
 import { getDb } from '@/db/client';
@@ -52,6 +58,17 @@ try {
   Astro.response.status = 503;
 }
 const barberInvalid = !!barberParam && !barber && !failed;
+const now = new Date();
+
+const OK_MESSAGES: Record<string, string> = {
+  concluido: 'Atendimento marcado como concluído.',
+  faltou: 'Falta registrada.',
+  cancelado: 'Atendimento cancelado.',
+  'bloqueio-criado': 'Bloqueio criado.',
+  'bloqueio-removido': 'Bloqueio removido.',
+};
+const okParam = Astro.url.searchParams.get('ok') ?? '';
+const okMessage = Object.hasOwn(OK_MESSAGES, okParam) ? OK_MESSAGES[okParam] : undefined;
 
 const STATUS: Record<string, { label: string; dot: string }> = {
   confirmed: { label: 'Confirmado', dot: 'bg-focus' },
@@ -62,6 +79,7 @@ const STATUS: Record<string, { label: string; dot: string }> = {
 
 type Row = {
   key: string;
+  id: number;
   start: Date;
   end: Date;
   day: string;
@@ -77,6 +95,7 @@ const nameOf = (id: number) => barbers.find((b) => b.id === id)?.name ?? `Barbei
 const rows: Row[] = [
   ...agenda.bookings.map((b): Row => ({
     key: `b${b.id}`,
+    id: b.id,
     start: b.startAt,
     end: b.endAt,
     day: utcToLocalDate(b.startAt),
@@ -90,6 +109,7 @@ const rows: Row[] = [
   })),
   ...agenda.blocks.map((b): Row => ({
     key: `t${b.id}`,
+    id: b.id,
     start: b.startAt,
     end: b.endAt,
     day: utcToLocalDate(b.startAt),
@@ -125,6 +145,56 @@ function href(d: string, semana = week) {
   const s = q.toString();
   return `/admin${s ? `?${s}` : ''}`;
 }
+// ---- Resultado das Actions (POST nesta mesma URL) ----
+const withParam = (url: string, k: string, v: string) =>
+  `${url}${url.includes('?') ? '&' : '?'}${k}=${v}`;
+const statusResult = Astro.getActionResult(actions.setBookingStatus);
+const removeResult = Astro.getActionResult(actions.deleteTimeBlock);
+const STATUS_OK: Record<string, string> = {
+  completed: 'concluido',
+  no_show: 'faltou',
+  cancelled: 'cancelado',
+};
+const okKey =
+  removeResult && !removeResult.error
+    ? 'bloqueio-removido'
+    : statusResult && !statusResult.error
+      ? STATUS_OK[statusResult.data.status]
+      : undefined;
+if (okKey) {
+  const res = Astro.redirect(withParam(href(date), 'ok', okKey), 303);
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
+let actionAlert: { title: string; text: string } | undefined;
+const actionError = statusResult?.error ?? removeResult?.error;
+if (actionError) {
+  const c = actionError.code;
+  if (c === 'CONFLICT') {
+    Astro.response.status = 409;
+    actionAlert = {
+      title: 'Não foi possível atualizar o atendimento',
+      text: 'Ele já foi encerrado, ou o horário ainda não começou. A lista abaixo está atualizada.',
+    };
+  } else if (c === 'NOT_FOUND') {
+    Astro.response.status = 404;
+    actionAlert = { title: 'Registro não encontrado', text: 'Ele pode já ter sido removido.' };
+  } else if (c === 'BAD_REQUEST') {
+    Astro.response.status = 400;
+    actionAlert = { title: 'Pedido inválido', text: 'Tente de novo.' };
+  } else {
+    Astro.response.status = c === 'INTERNAL_SERVER_ERROR' ? 500 : 503;
+    actionAlert = { title: 'Algo deu errado', text: 'Tente de novo em instantes.' };
+  }
+}
+/** URL do POST: mantém data/visão/barbeiro e aciona a Action pelo parâmetro `_action` do Astro. */
+const actionUrl = (name: string) => withParam(href(date), '_action', name);
+const newBlockHref = (() => {
+  const p = new URLSearchParams({ data: date });
+  if (week) p.set('visao', 'semana');
+  if (barber) p.set('barbeiro', barber.slug);
+  return `/admin/bloqueios/novo?${p}`;
+})();
 const title = week
   ? `${formatDateLong(days[0])} a ${formatDateLong(days[6])}`
   : formatDateLong(date, true);
@@ -174,6 +244,12 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
           Próximo
         </a>
       </nav>
+      <a
+        href={newBlockHref}
+        class={`${linkCls} bg-primary text-on-primary hover:bg-primary-hover border-transparent`}
+      >
+        Novo bloqueio
+      </a>
       <form method="get" action="/admin" class="flex items-center gap-2">
         {date !== today && <input type="hidden" name="data" value={date} />}
         {week && <input type="hidden" name="visao" value="semana" />}
@@ -205,6 +281,12 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
       {title}
     </h2>
 
+    {okMessage && <Alert variant="success" title={okMessage} class="mb-4" />}
+    {actionAlert && (
+      <Alert variant="warning" title={actionAlert.title} class="mb-4">
+        {actionAlert.text}
+      </Alert>
+    )}
     {dataParam && !validDate && (
       <Alert variant="warning" title="Data inválida" class="mb-4">
         Mostrando hoje.
@@ -251,6 +333,9 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
                   </th>
                   <th role="columnheader" scope="col" class="px-3 py-2">
                     Status
+                  </th>
+                  <th role="columnheader" scope="col" class="px-3 py-2">
+                    Ações
                   </th>
                 </tr>
               </thead>
@@ -322,6 +407,74 @@ const lbl = 'text-text-muted w-20 shrink-0 font-medium md:hidden';
                       ) : (
                         <span>Bloqueado</span>
                       )}
+                    </td>
+                    <td role="cell" class={cell}>
+                      <span aria-hidden="true" class={lbl}>
+                        Ações
+                      </span>
+                      <div>
+                        {r.kind === 'booking' && r.status === 'confirmed' && (
+                          <div class="flex flex-wrap items-start gap-2">
+                            <form method="POST" action={actionUrl('setBookingStatus')}>
+                              <input type="hidden" name="bookingId" value={r.id} />
+                              <input type="hidden" name="status" value="completed" />
+                              <Button
+                                type="submit"
+                                variant="secondary"
+                                class="px-3"
+                                aria-label={`Concluído, atendimento das ${formatTime(r.start)}`}
+                              >
+                                Concluído
+                              </Button>
+                            </form>
+                            {r.start <= now && (
+                              <form method="POST" action={actionUrl('setBookingStatus')}>
+                                <input type="hidden" name="bookingId" value={r.id} />
+                                <input type="hidden" name="status" value="no_show" />
+                                <Button
+                                  type="submit"
+                                  variant="secondary"
+                                  class="px-3"
+                                  aria-label={`Não compareceu, atendimento das ${formatTime(r.start)}`}
+                                >
+                                  Não compareceu
+                                </Button>
+                              </form>
+                            )}
+                            <details class="w-full">
+                              <summary class={`${linkCls} cursor-pointer px-3`}>Cancelar</summary>
+                              <form
+                                method="POST"
+                                action={actionUrl('setBookingStatus')}
+                                class="mt-2 grid gap-2"
+                              >
+                                <input type="hidden" name="bookingId" value={r.id} />
+                                <input type="hidden" name="status" value="cancelled" />
+                                <p>Cancelar este atendimento? O horário volta a ficar livre.</p>
+                                <Button type="submit" class="px-3">
+                                  Confirmar cancelamento
+                                </Button>
+                              </form>
+                            </details>
+                          </div>
+                        )}
+                        {r.kind === 'block' && (
+                          <details>
+                            <summary class={`${linkCls} cursor-pointer px-3`}>Remover</summary>
+                            <form
+                              method="POST"
+                              action={actionUrl('deleteTimeBlock')}
+                              class="mt-2 grid gap-2"
+                            >
+                              <input type="hidden" name="blockId" value={r.id} />
+                              <p>Remover este bloqueio? O horário volta a ficar livre.</p>
+                              <Button type="submit" class="px-3">
+                                Confirmar remoção
+                              </Button>
+                            </form>
+                          </details>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

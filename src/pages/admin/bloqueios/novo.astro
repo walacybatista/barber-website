@@ -1,0 +1,252 @@
+---
+/**
+ * Novo bloqueio (almoço, folga). Página própria (não um bloco na agenda): em celular o formulário
+ * ocupa a tela inteira, o erro/conflito reexibe os valores digitados e a agenda continua só leitura.
+ * POST (accept: 'form') para a Action `createTimeBlock`; funciona sem JavaScript. Sucesso: PRG 303
+ * para a agenda do dia/barbeiro do bloqueio com `?ok=bloqueio-criado`.
+ */
+import { actions, isInputError } from 'astro:actions';
+import AdminLayout from '@/layouts/AdminLayout.astro';
+import Alert from '@/components/form/Alert.astro';
+import Button from '@/components/Button.astro';
+import Container from '@/components/Container.astro';
+import FieldError from '@/components/form/FieldError.astro';
+import Input from '@/components/form/Input.astro';
+import { requireAdmin } from '../_guard';
+import { getDb } from '@/db/client';
+import { listCatalog } from '@/lib/booking/repository';
+import { isValidLocalDate, utcToLocalDate } from '@/lib/time/tz';
+
+export const prerender = false;
+
+const guard = requireAdmin(Astro);
+if (guard.response) return guard.response;
+const { admin } = guard;
+
+// Valores do formulário: do POST (reexibir após erro) ou da query (atalho vindo da agenda).
+const src = new Map<string, string>();
+if (Astro.request.method === 'POST') {
+  try {
+    const fd = await Astro.request.formData();
+    for (const [k, v] of fd) if (typeof v === 'string') src.set(k, v.slice(0, 200));
+  } catch {
+    // corpo ilegível: segue vazio
+  }
+}
+
+let barbers: Awaited<ReturnType<typeof listCatalog>>['barbers'] = [];
+let failed = false;
+try {
+  barbers = (await listCatalog(getDb())).barbers;
+} catch (err) {
+  console.error('[admin] falha ao carregar barbeiros', err instanceof Error ? err.message : err);
+  failed = true;
+}
+
+const today = utcToLocalDate(new Date());
+const q = Astro.url.searchParams;
+const queryDate = q.get('data') ?? '';
+const queryBarber = barbers.find((b) => b.slug === q.get('barbeiro'));
+const values = {
+  barberId: src.get('barberId') ?? String(queryBarber?.id ?? ''),
+  date: src.get('date') ?? (isValidLocalDate(queryDate) ? queryDate : today),
+  startTime: src.get('startTime') ?? '12:00',
+  endTime: src.get('endTime') ?? '13:00',
+  reason: src.get('reason') ?? '',
+};
+
+// ---- Resultado da Action ----
+const result = Astro.getActionResult(actions.createTimeBlock);
+if (result && !result.error) {
+  const slug = barbers.find((b) => String(b.id) === values.barberId)?.slug;
+  const params = new URLSearchParams({ data: values.date });
+  if (slug) params.set('barbeiro', slug);
+  params.set('ok', 'bloqueio-criado');
+  const res = Astro.redirect(`/admin?${params}`, 303);
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
+
+let alert: { variant: 'error' | 'warning'; title: string; text: string } | undefined;
+const fieldErrors: Record<string, string | undefined> = {};
+if (failed) {
+  Astro.response.status = 503;
+  alert = {
+    variant: 'error',
+    title: 'Não foi possível carregar o formulário',
+    text: 'Tente de novo em instantes.',
+  };
+} else if (result?.error) {
+  const e = result.error;
+  if (isInputError(e)) {
+    Astro.response.status = 400;
+    for (const [k, msgs] of Object.entries(e.fields)) fieldErrors[k] = msgs?.[0];
+    alert = {
+      variant: 'warning',
+      title: 'Confira os campos',
+      text: 'Corrija os itens indicados e envie de novo.',
+    };
+  } else if (e.code === 'CONFLICT') {
+    Astro.response.status = 409;
+    alert = {
+      variant: 'warning',
+      title: 'Há atendimento nesse período',
+      text: 'Já existe agendamento ou outro bloqueio nesse horário. Cancele o agendamento antes de bloquear, ou escolha outro período.',
+    };
+  } else if (e.code === 'NOT_FOUND' || e.code === 'BAD_REQUEST') {
+    Astro.response.status = 400;
+    alert = {
+      variant: 'warning',
+      title: 'Dados inválidos',
+      text: 'Confira barbeiro, data e horários.',
+    };
+  } else {
+    Astro.response.status = e.code === 'INTERNAL_SERVER_ERROR' ? 500 : 503;
+    alert = {
+      variant: 'error',
+      title: 'Algo deu errado',
+      text: 'Não foi possível criar o bloqueio agora. Tente de novo em instantes.',
+    };
+  }
+}
+
+// Horários de 15 em 15 min (a Action também valida).
+const times: string[] = [];
+for (let m = 6 * 60; m < 24 * 60; m += 15) {
+  times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+}
+const back = (() => {
+  const p = new URLSearchParams();
+  if (isValidLocalDate(queryDate) && queryDate !== today) p.set('data', queryDate);
+  if (q.get('visao') === 'semana') p.set('visao', 'semana');
+  if (queryBarber) p.set('barbeiro', queryBarber.slug);
+  const s = p.toString();
+  return `/admin${s ? `?${s}` : ''}`;
+})();
+const fieldCls =
+  'bg-surface text-text border-border-strong hover:border-text-muted focus:border-focus focus:outline-focus min-h-12 w-full rounded-md border px-3 focus:outline-[3px] focus:outline-offset-0';
+const err = (k: string) => (fieldErrors[k] ? 'border-error border-2' : '');
+---
+
+<AdminLayout title="Novo bloqueio · Painel" username={admin.username}>
+  <Container class="max-w-xl py-6">
+    <p class="mb-2">
+      <a href={back} class="text-focus underline">
+        Voltar para a agenda
+      </a>
+    </p>
+    <h1 class="text-h2 font-display mb-4 font-bold">Novo bloqueio</h1>
+
+    {alert && (
+      <Alert variant={alert.variant} title={alert.title} class="mb-6">
+        {alert.text}
+      </Alert>
+    )}
+
+    {!failed && (
+      <form method="POST" action={actions.createTimeBlock} class="grid gap-5">
+        <div>
+          <label for="barberId" class="mb-1 block font-medium">
+            Barbeiro
+          </label>
+          <select
+            id="barberId"
+            name="barberId"
+            required
+            aria-invalid={fieldErrors.barberId ? 'true' : undefined}
+            aria-describedby={fieldErrors.barberId ? 'barberId-erro' : undefined}
+            class:list={[fieldCls, err('barberId')]}
+          >
+            <option value="" selected={values.barberId === ''}>
+              Escolha o barbeiro
+            </option>
+            {barbers.map((b) => (
+              <option value={b.id} selected={String(b.id) === values.barberId}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+          <FieldError id="barberId-erro" message={fieldErrors.barberId} />
+        </div>
+
+        <div>
+          <label for="date" class="mb-1 block font-medium">
+            Data
+          </label>
+          <input
+            id="date"
+            name="date"
+            type="date"
+            required
+            value={values.date}
+            aria-invalid={fieldErrors.date ? 'true' : undefined}
+            aria-describedby={fieldErrors.date ? 'date-erro' : undefined}
+            class:list={[fieldCls, err('date')]}
+          />
+          <FieldError id="date-erro" message={fieldErrors.date} />
+        </div>
+
+        <div class="grid gap-5 sm:grid-cols-2">
+          <div>
+            <label for="startTime" class="mb-1 block font-medium">
+              Início
+            </label>
+            <select
+              id="startTime"
+              name="startTime"
+              required
+              aria-invalid={fieldErrors.startTime ? 'true' : undefined}
+              aria-describedby={fieldErrors.startTime ? 'startTime-erro' : undefined}
+              class:list={[fieldCls, err('startTime')]}
+            >
+              {times.map((t) => (
+                <option value={t} selected={t === values.startTime}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <FieldError id="startTime-erro" message={fieldErrors.startTime} />
+          </div>
+          <div>
+            <label for="endTime" class="mb-1 block font-medium">
+              Fim
+            </label>
+            <select
+              id="endTime"
+              name="endTime"
+              required
+              aria-invalid={fieldErrors.endTime ? 'true' : undefined}
+              aria-describedby={fieldErrors.endTime ? 'endTime-erro' : undefined}
+              class:list={[fieldCls, err('endTime')]}
+            >
+              {times.map((t) => (
+                <option value={t} selected={t === values.endTime}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <FieldError id="endTime-erro" message={fieldErrors.endTime} />
+          </div>
+        </div>
+
+        <Input
+          id="reason"
+          name="reason"
+          label="Motivo (opcional)"
+          help="Até 120 caracteres. Não coloque dados pessoais de clientes."
+          value={values.reason}
+          error={fieldErrors.reason}
+          required={false}
+          maxlength={120}
+        />
+
+        <div class="flex flex-wrap gap-3">
+          <Button type="submit">Criar bloqueio</Button>
+          <Button href={back} variant="secondary">
+            Cancelar
+          </Button>
+        </div>
+      </form>
+    )}
+  </Container>
+</AdminLayout>

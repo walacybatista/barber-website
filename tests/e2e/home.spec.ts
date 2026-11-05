@@ -138,6 +138,8 @@ test.describe('menu mobile (360px)', () => {
     page,
   }) => {
     await page.goto('/');
+    // O menu só recolhe após o script marcar data-menu-ready (progressive enhancement); sem esperar, há corrida.
+    await expect(page.locator('header[data-menu-ready]')).toHaveCount(1);
     const button = page.getByRole('button', { name: 'Menu' });
     const nav = page.getByRole('navigation', { name: 'Principal' });
     const main = page.locator('main');
@@ -168,6 +170,7 @@ test.describe('menu mobile (360px)', () => {
 
   test('selecionar item fecha o menu', async ({ page }) => {
     await page.goto('/');
+    await expect(page.locator('header[data-menu-ready]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Menu' }).click();
     await page
       .getByRole('navigation', { name: 'Principal' })

@@ -42,6 +42,19 @@ export class InvalidStateError extends DomainError {
   }
 }
 
+/**
+ * Barbeiro do agendamento está inativo: reagendar/listar horários é recusado. Estende
+ * `InvalidStateError` e mantém o código `INVALID_STATE` de propósito: `toActionError`
+ * (src/actions) já o traduz para CONFLICT; um código novo cairia em BAD_REQUEST. A causa
+ * fica em `reason` ('BARBER_UNAVAILABLE').
+ */
+export class BarberUnavailableError extends InvalidStateError {
+  reason = 'BARBER_UNAVAILABLE';
+  constructor() {
+    super('Este barbeiro não está mais disponível.');
+  }
+}
+
 export class InvalidInputError extends DomainError {
   constructor(message: string) {
     super('INVALID_INPUT', message);

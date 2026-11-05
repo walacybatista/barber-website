@@ -22,6 +22,7 @@ import {
   rescheduleBooking,
 } from '../lib/booking/repository.ts';
 import { normalizePhone } from '../lib/booking/rules.ts';
+import { isValidLocalDate, localToUtc } from '../lib/time/tz.ts';
 
 /** Fronteira HTTP fina: valida (zod), chama lib/ e traduz erros de domínio. */
 function toActionError(err: unknown): never {
@@ -82,6 +83,7 @@ function clientIp(context: ActionAPIContext): string {
 }
 
 const BOOKING_MAX_PER_IP = 10;
+const QUARTER_HOUR = /^([01]\d|2[0-3]):(00|15|30|45)$/;
 
 const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const isoInstant = z.iso.datetime({ offset: true }).transform((s) => new Date(s));
@@ -223,19 +225,43 @@ export const server = {
     },
   }),
 
+  // accept: 'form': /admin e /admin/bloqueios/novo postam FormData (sem JS). Data/hora locais
+  // (America/Sao_Paulo) viram instantes UTC no handler. Vazio chega como null.
   createTimeBlock: defineAction({
+    accept: 'form',
     input: z
       .object({
-        barberId: z.number().int().positive(),
-        startAt: isoInstant,
-        endAt: isoInstant,
-        reason: z.string().trim().max(200).optional(),
+        barberId: z.number({ error: 'Escolha o barbeiro.' }).int().positive(),
+        date: z
+          .string({ error: 'Informe a data.' })
+          .regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe a data.')
+          .refine(isValidLocalDate, 'Data inválida.'),
+        startTime: z
+          .string({ error: 'Informe o início.' })
+          .regex(QUARTER_HOUR, 'Use horários de 15 em 15 minutos.'),
+        endTime: z
+          .string({ error: 'Informe o fim.' })
+          .regex(QUARTER_HOUR, 'Use horários de 15 em 15 minutos.'),
+        reason: z
+          .string()
+          .trim()
+          .max(120, 'Motivo muito longo (máximo 120 caracteres).')
+          .nullable(),
       })
-      .refine((v) => v.endAt > v.startAt, { message: 'Fim deve ser depois do início.' }),
+      .refine((v) => v.endTime > v.startTime, {
+        path: ['endTime'],
+        message: 'O fim deve ser depois do início.',
+      }),
     handler: async (input, context) => {
       const admin = await requireAdmin(context);
       try {
-        const b = await createTimeBlock(getDb(), { ...input, createdBy: admin.id });
+        const b = await createTimeBlock(getDb(), {
+          barberId: input.barberId,
+          startAt: localToUtc(input.date, input.startTime),
+          endAt: localToUtc(input.date, input.endTime),
+          reason: input.reason ?? '',
+          createdBy: admin.id,
+        });
         return { id: b.id };
       } catch (err) {
         return toActionError(err);
@@ -244,6 +270,7 @@ export const server = {
   }),
 
   deleteTimeBlock: defineAction({
+    accept: 'form',
     input: z.object({ blockId: z.number().int().positive() }),
     handler: async ({ blockId }, context) => {
       await requireAdmin(context);
@@ -257,6 +284,7 @@ export const server = {
   }),
 
   setBookingStatus: defineAction({
+    accept: 'form',
     input: z.object({
       bookingId: z.number().int().positive(),
       status: z.enum(['cancelled', 'completed', 'no_show']),
