@@ -111,7 +111,9 @@ describe('sessões', () => {
   });
 });
 
-describe('login e rate limit', () => {
+// Cada login paga scrypt N=2^17 (semáforo de 2): testes com 20–30 logins levam ~5–22 s (medido 21,3 s).
+// O prazo global de 20 s gerava falha intermitente; 90 s dá ~4x de folga sem baixar o custo real do hash.
+describe('login e rate limit', { timeout: 90_000 }, () => {
   it('credenciais corretas abrem sessão; erradas dão erro genérico', async () => {
     const ok = await login(db, { username: 'DONO', password: PASSWORD, ip: '1.1.1.1', now: NOW });
     expect(ok.sessionId).toBeTruthy();
