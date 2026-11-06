@@ -5,6 +5,7 @@ import {
   barbers,
   bookings,
   busyPeriods,
+  loginAttempts,
   openingHours,
   services,
   timeBlocks,
@@ -30,6 +31,7 @@ import {
   type BusyPeriod,
   type OpeningHour,
 } from './rules.ts';
+import { RETENTION_MS } from '../rate-limit.ts';
 import { generateToken, hashToken } from './token.ts';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -147,6 +149,12 @@ export async function listAvailability(
   if (!isValidLocalDate(input.date)) throw new InvalidInputError('Data inválida.');
   // Fora da janela (RN03) não há horário: evita consultar o banco para datas passadas/remotas.
   const { earliest, latest } = bookingWindow(now);
+  // Checa por string ANTES de converter: anos extremos (9999-12-31) estouram nextLocalDate/localToUtc.
+  if (
+    input.date < utcToLocalDate(earliest, timezone) ||
+    input.date > utcToLocalDate(latest, timezone)
+  )
+    return [];
   const dayStartUtc = localToUtc(input.date, '00:00', timezone);
   const dayEndUtc = localToUtc(nextLocalDate(input.date), '00:00', timezone);
   if (dayEndUtc <= earliest || dayStartUtc > latest) return [];
@@ -715,6 +723,10 @@ export async function anonymizeOldBookings(
       .update(timeBlocks)
       .set({ reason: '' })
       .where(and(lt(timeBlocks.endAt, cutoff), sql`${timeBlocks.reason} <> ''`));
+    // Retenção do hash de IP (chave de rate limit): descarta tentativas além da janela máxima.
+    await tx
+      .delete(loginAttempts)
+      .where(lt(loginAttempts.attemptedAt, new Date(now.getTime() - RETENTION_MS)));
     return rows.length;
   });
 }

@@ -1,17 +1,19 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema.ts';
+import { ConfigError } from '../lib/log.ts';
 
 export type Db = ReturnType<typeof createDb>['db'];
 export type Sql = ReturnType<typeof postgres>;
 
 /**
- * Astro/Vite expõe .env em `import.meta.env`, não em `process.env`; scripts Node só têm `process.env`.
- * `import.meta.env` é undefined fora do Vite (type stripping), daí o `?.`.
+ * Segredos de servidor vêm SOMENTE de `process.env`, em tempo de execução. NUNCA use
+ * `import.meta.env[name]` dinâmico: o Vite embute o env inteiro do build no bundle do servidor
+ * (vaza `DATABASE_URL` em `dist/`) e o valor embutido vence o runtime. O `.env` é carregado
+ * em dev/scripts por `loadDotEnv()` (não sobrescreve variáveis já definidas).
  */
 export function readEnv(name: string): string | undefined {
-  const fromVite = (import.meta as { env?: Record<string, string | undefined> }).env?.[name];
-  return fromVite ?? process.env[name];
+  return process.env[name];
 }
 
 /** Carrega `.env` em scripts CLI; só ignora "arquivo não existe". */
@@ -43,9 +45,14 @@ const globalCache = globalThis as unknown as { __barberDb?: Cached };
 function connection(): Cached {
   // globalThis evita abrir um pool novo a cada reload (HMR) do `astro dev`.
   if (!globalCache.__barberDb) {
+    // `astro dev` só expõe o .env em import.meta.env (não em process.env): carrega aqui.
+    // Em produção o ambiente é a única fonte: sem DATABASE_URL, falha com mensagem clara.
+    if (!readEnv('DATABASE_URL') && process.env.NODE_ENV !== 'production') loadDotEnv();
     const url = readEnv('DATABASE_URL');
     if (!url) {
-      throw new Error('DATABASE_URL não definida. Copie .env.example para .env e ajuste o valor.');
+      throw new ConfigError(
+        'DATABASE_URL não definida. Defina no ambiente (em dev: copie .env.example para .env).',
+      );
     }
     globalCache.__barberDb = createDb(url);
   }

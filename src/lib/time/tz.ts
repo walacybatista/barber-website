@@ -87,6 +87,11 @@ export function isValidLocalDate(date: string): boolean {
   );
 }
 
+/** Limite de datas aceitas em telas/ações admin (agenda e bloqueios): 2000-01-01 a 2100-12-31. */
+export function isAdminDateInRange(date: string): boolean {
+  return isValidLocalDate(date) && date >= '2000-01-01' && date <= '2100-12-31';
+}
+
 /** Dia da semana (0 = domingo) de uma data local `YYYY-MM-DD`. */
 export function weekdayOf(date: string): number {
   const d = DATE_RE.exec(date);

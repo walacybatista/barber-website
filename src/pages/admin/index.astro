@@ -13,7 +13,7 @@ import { noStoreRedirect, requireAdmin } from './_guard';
 import { getDb } from '@/db/client';
 import { listAgenda, listCatalog } from '@/lib/booking/repository';
 import { addDays, formatDateLong, formatTime } from '@/lib/agendar';
-import { isValidLocalDate, localToUtc, utcToLocalDate, weekdayOf } from '@/lib/time/tz';
+import { isAdminDateInRange, localToUtc, utcToLocalDate, weekdayOf } from '@/lib/time/tz';
 import { logError } from '@/lib/log';
 
 export const prerender = false;
@@ -24,11 +24,7 @@ const { admin } = guard;
 
 const today = utcToLocalDate(new Date());
 const dataParam = Astro.url.searchParams.get('data');
-const validDate =
-  !!dataParam &&
-  isValidLocalDate(dataParam) &&
-  dataParam >= '2000-01-01' &&
-  dataParam <= '2100-12-31';
+const validDate = !!dataParam && isAdminDateInRange(dataParam);
 const date = validDate ? dataParam : today;
 const week = Astro.url.searchParams.get('visao') === 'semana';
 const barberParam = Astro.url.searchParams.get('barbeiro') ?? '';

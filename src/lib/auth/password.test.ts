@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { hashPassword, needsRehash, verifyPassword } from './password.ts';
 
-describe('password (scrypt)', () => {
+// scrypt N=2^17 custa centenas de ms por hash e o semáforo limita a 2 simultâneos (ADR-011):
+// o prazo padrão de 5 s ficava no limite sob carga e gerava falha intermitente.
+describe('password (scrypt)', { timeout: 30_000 }, () => {
   it('verifica senha correta e rejeita errada; salt aleatório', async () => {
     const h1 = await hashPassword('correct horse battery');
     const h2 = await hashPassword('correct horse battery');

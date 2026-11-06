@@ -63,6 +63,7 @@ test.describe('validação das Actions admin (com sessão válida)', () => {
     const create = (over: Record<string, string>) =>
       postForm(CREATE, { ...VALID_BLOCK, ...over }, { Cookie: cookie });
     expect(await create({ date: '2026-02-31' }), 'data inexistente').toBe(400);
+    expect(await create({ date: '2101-01-01' }), 'data fora do intervalo').toBe(400);
     expect(await create({ startTime: '09:10' }), 'início fora de 15 em 15').toBe(400);
     expect(await create({ reason: 'a'.repeat(121) }), 'motivo com 121 caracteres').toBe(400);
     expect(await postForm(DELETE, { blockId: '999999999' }, { Cookie: cookie })).toBe(404);

@@ -3,7 +3,7 @@ import type { Db } from '../db/client.ts';
 import { loginAttempts } from '../db/schema.ts';
 
 /** Janela máxima usada por qualquer bucket; registros mais antigos são descartados. */
-const RETENTION_MS = 60 * 60 * 1000;
+export const RETENTION_MS = 60 * 60 * 1000;
 
 /** Chance de executar a limpeza a cada consumo (1 em 20). */
 export const CLEANUP_PROBABILITY = 1 / 20;

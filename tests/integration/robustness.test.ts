@@ -11,7 +11,7 @@ import {
 } from '../../src/db/schema.ts';
 import { login } from '../../src/lib/auth/login.ts';
 import { verifyPassword } from '../../src/lib/auth/password.ts';
-import { consumeRateLimit } from '../../src/lib/rate-limit.ts';
+import { consumeRateLimit, RETENTION_MS } from '../../src/lib/rate-limit.ts';
 import { BlockConflictError, SlotTakenError } from '../../src/lib/booking/errors.ts';
 import {
   anonymizeOldBookings,
@@ -99,6 +99,18 @@ describe('rate limit: limpeza oportunista', () => {
           : Reflect.get(t, p, r),
     });
     await expect(consumeRateLimit(broken, buckets, NOW, () => 0)).resolves.toHaveLength(1);
+  });
+});
+
+describe('anonimização: retenção do hash de IP', () => {
+  it('apaga login_attempts além de RETENTION_MS e mantém os recentes', async () => {
+    await db.insert(loginAttempts).values([
+      { key: 'old', attemptedAt: new Date(NOW.getTime() - RETENTION_MS - 1000) },
+      { key: 'new', attemptedAt: new Date(NOW.getTime() - RETENTION_MS + 60_000) },
+    ]);
+    await anonymizeOldBookings(db, { now: NOW });
+    const rows = await db.select().from(loginAttempts);
+    expect(rows.map((r) => r.key)).toEqual(['new']);
   });
 });
 
@@ -225,6 +237,18 @@ describe('anonimização: cancelado sem cancelledAt', () => {
     );
     const [row] = await db.select().from(bookings).where(eq(bookings.id, c.booking.id));
     expect(row.customerName).toBe('Anonimizado');
+  });
+});
+
+describe('datas extremas', () => {
+  it('listAvailability retorna [] para datas fora da janela, sem RangeError', async () => {
+    await resetDb(db);
+    const ctx2 = await seedBasics(db);
+    for (const date of ['9999-12-31', '0101-01-01']) {
+      await expect(
+        listAvailability(db, { date, serviceId: ctx2.svc.id, barberId: ctx2.b1.id, now: NOW }),
+      ).resolves.toEqual([]);
+    }
   });
 });
 

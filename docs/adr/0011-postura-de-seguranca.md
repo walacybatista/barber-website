@@ -24,7 +24,8 @@ vulnerabilidade explorável na configuração padrão; um achado alto dependente
 - **S5 (parte):** telefone não é verificado (sem SMS/WhatsApp/CAPTCHA). Num cliente real, exigir confirmação do
   telefone antes de considerar o agendamento confirmado.
 - **S6:** 20 erros de senha em 15 min bloqueiam o usuário admin (inclusive o dono). Trade-off documentado no código.
-- **S13:** chaves de rate limit são `sha256(ip)` sem sal; retenção de 1 h limita a exposição.
+- **S13:** chaves de rate limit são `sha256(ip)` sem sal. Registros com mais de 1 h são apagados pela limpeza
+  oportunista e pelo cron diário (`db:anonymize`); a política promete no máximo 48 h (folga para atraso do cron).
 
 ### Responsabilidade do deploy (checklist do release-engineer)
 - **S1:** `ALLOWED_DOMAIN` é **obrigatório atrás de proxy**: sem ele o Astro ignora `X-Forwarded-For`,
@@ -37,8 +38,15 @@ vulnerabilidade explorável na configuração padrão; um achado alto dependente
   antigo é ignorado). `__Host-` exige HTTPS em produção; a remoção do cookie precisa repetir `Secure`, senão o
   navegador a ignora (corrigido via `sessionCookieDeleteOptions()`).
 - **S4:** cabeçalhos no proxy (valem também para estáticos servidos sem middleware): HSTS, `nosniff`,
-  `frame-ancestors 'none'`/`X-Frame-Options: DENY`, `Permissions-Policy`, `COOP`. CSP via `security.csp` do Astro
-  avaliada após a medição de performance (Fase 8).
+  `frame-ancestors 'none'`/`X-Frame-Options: DENY`, `Permissions-Policy`, `COOP`.
+- **CSP (implementada):** `security.csp` do Astro 7 — `default-src 'self'`, `script-src`/`style-src` por hash
+  (sem `'unsafe-inline'`), `frame-src` só Google Maps, `object-src 'none'`, `base-uri`/`form-action 'self'`.
+  Páginas prerenderizadas recebem `<meta>`, páginas SSR o header. O único `<script is:inline>` (BaseLayout) tem
+  hash declarado em `astro.config.mjs` — editar esse script exige recalcular o hash (o e2e `csp.spec.ts` falha se
+  divergir). Regras: nada de `style="..."` nem `on*=` em componentes. `frame-ancestors` não funciona via
+  `<meta>`: fica no proxy.
+- **Artefato:** `npm run check:dist` é obrigatório após o build de release (falha se houver credencial em `dist/`,
+  achado C1 da varredura complementar: `import.meta.env` dinâmico embutia o env do build no servidor).
 - **S7:** `limit_req` no proxy para `/_actions/*`, `/agendar`, `/admin/login`.
 
 ## Consequências

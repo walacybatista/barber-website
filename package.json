@@ -25,6 +25,7 @@
     "db:seed": "node --experimental-strip-types scripts/seed.ts",
     "db:anonymize": "node --experimental-strip-types scripts/anonymize.ts",
     "admin:create": "node --experimental-strip-types scripts/create-admin.ts",
+    "check:dist": "node scripts/check-dist-secrets.mjs",
     "validate": "npm run check && tsc --noEmit && npm run lint && npm run format:check && npm test"
   },
   "dependencies": {

@@ -26,3 +26,13 @@ describe('logError', () => {
     expect(spy).toHaveBeenCalledWith('[t]', 'string');
   });
 });
+
+describe('ConfigError', () => {
+  it('loga a mensagem (segura por construção) para o operador saber o que falta', async () => {
+    const { ConfigError, logError } = await import('./log.ts');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    logError('[boot]', new ConfigError('DATABASE_URL não definida.'));
+    expect(String(spy.mock.calls[0]?.[1])).toBe('ConfigError: DATABASE_URL não definida.');
+    spy.mockRestore();
+  });
+});

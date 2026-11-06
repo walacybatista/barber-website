@@ -24,7 +24,7 @@ import {
   rescheduleBooking,
 } from '../lib/booking/repository.ts';
 import { normalizePhone } from '../lib/booking/rules.ts';
-import { isValidLocalDate, localToUtc } from '../lib/time/tz.ts';
+import { isAdminDateInRange, localToUtc } from '../lib/time/tz.ts';
 
 /** Fronteira HTTP fina: valida (zod), chama lib/ e traduz erros de domínio. */
 function toActionError(err: unknown): never {
@@ -218,7 +218,7 @@ export const server = {
         date: z
           .string({ error: 'Informe a data.' })
           .regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe a data.')
-          .refine(isValidLocalDate, 'Data inválida.'),
+          .refine(isAdminDateInRange, 'Data fora do intervalo permitido (2000 a 2100).'),
         startTime: z
           .string({ error: 'Informe o início.' })
           .regex(QUARTER_HOUR, 'Use horários de 15 em 15 minutos.'),
